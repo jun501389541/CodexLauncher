@@ -18,6 +18,7 @@ internal sealed record BridgeLanStatus(string State,string? Endpoint=null,string
 
 internal sealed class BridgeLanCoordinator : IAsyncDisposable
 {
+    private static readonly TimeSpan ReconcileInterval=TimeSpan.FromSeconds(2);
     private readonly string _bridgeId;
     private readonly IBridgeNetworkSource _network;
     private readonly Func<BridgeNetworkBinding,BridgeBindingLease,IBridgeLanEndpoint> _factory;
@@ -44,7 +45,7 @@ internal sealed class BridgeLanCoordinator : IAsyncDisposable
         _bridgeId=bridgeId;_network=network;_factory=factory;_discoveryFactory=discoveryFactory??(()=>new MakaretuBridgeDiscovery());
         network.Changed+=OnChanged;
         _worker=ProcessAsync();
-        _timer=new(_=>_signals.Writer.TryWrite(false),null,TimeSpan.FromSeconds(2),TimeSpan.FromSeconds(2));
+        _timer=new(_=>_signals.Writer.TryWrite(false),null,System.Threading.Timeout.InfiniteTimeSpan,System.Threading.Timeout.InfiniteTimeSpan);
     }
     private void OnChanged(bool invalidate)
     {
@@ -67,7 +68,7 @@ internal sealed class BridgeLanCoordinator : IAsyncDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed,this);
             if(_adapter!=adapterId||_port!=port)_lease?.Invalidate();
-            _adapter=adapterId;_port=port;_enabled=true;
+            _adapter=adapterId;_port=port;_enabled=true;SetPeriodicReconciliation(true);
             await ReconcileLocked();
         }
         finally{_gate.Release();}
@@ -156,11 +157,19 @@ internal sealed class BridgeLanCoordinator : IAsyncDisposable
         _binding=null;_lease=null;
     }
     private void Publish(BridgeLanStatus status)
-    {Status=status;try{StatusChanged?.Invoke(status);}catch{}}
+    {
+        if(Status==status)return;
+        Status=status;try{StatusChanged?.Invoke(status);}catch{}
+    }
+    private void SetPeriodicReconciliation(bool enabled)
+    {
+        var due=enabled?ReconcileInterval:System.Threading.Timeout.InfiniteTimeSpan;
+        try{_timer.Change(due,due);}catch(ObjectDisposedException){}
+    }
     internal async Task StopAsync()
     {
         Interlocked.Increment(ref _generation);_lease?.Invalidate();await _gate.WaitAsync();
-        try{_enabled=false;await CloseEndpoint();Publish(new("STOPPED"));}
+        try{_enabled=false;SetPeriodicReconciliation(false);await CloseEndpoint();Publish(new("STOPPED"));}
         finally{_gate.Release();}
     }
     public async ValueTask DisposeAsync()

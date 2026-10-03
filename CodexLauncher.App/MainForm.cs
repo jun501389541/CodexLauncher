@@ -170,6 +170,7 @@ public sealed class MainForm : Form
     private readonly AsyncOperationGate _operationGate = new();
     private readonly ICommandRunner _commands = new ProcessCommandRunner();
     private readonly LauncherSettingsStore _settings;
+    private LauncherSettings? _lastSavedSettings;
     private readonly AppLauncher _launcher;
     private readonly DiagnosticLogger _logger;
     private readonly HttpClient _gatewayHttp = new(new SocketsHttpHandler { UseProxy = false });
@@ -1636,8 +1637,9 @@ public sealed class MainForm : Form
 
     private void SaveLauncherSettings(LauncherSettings settings)
     {
+        if (_lastSavedSettings == settings) return;
         var result = _settings.TrySave(settings);
-        if (result.Succeeded) return;
+        if (result.Succeeded) { _lastSavedSettings = settings; return; }
         _settingsWritable = false;
         SetRow("本地设置", "写入失败；本次运行仍可使用，设置下次不会保留", null);
         _logger.Write("settings-save", result.ErrorType ?? "Failed", null);

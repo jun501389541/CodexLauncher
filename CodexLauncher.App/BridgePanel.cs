@@ -21,6 +21,7 @@ internal sealed class BridgePanel:UserControl
     private readonly ListView _pending=new(){View=View.Details,FullRowSelect=true,MultiSelect=false,Height=100,Dock=DockStyle.Top,OwnerDraw=true,BorderStyle=BorderStyle.None,BackColor=UiTheme.Card,ForeColor=UiTheme.Text};
     private readonly ListView _devices=new(){Name="BridgeDevices",View=View.Details,FullRowSelect=true,MultiSelect=false,Height=120,Dock=DockStyle.Top,OwnerDraw=true,BorderStyle=BorderStyle.None,BackColor=UiTheme.Card,ForeColor=UiTheme.Text};
     private readonly System.Windows.Forms.Timer _timer=new(){Interval=1000};
+    private Form? _hostForm;
     private BridgeRuntime? _runtime;
     private BridgeInvitation? _invitation;
     private BridgePairingService? _invitationOwner;
@@ -43,6 +44,7 @@ internal sealed class BridgePanel:UserControl
             _expanded=!_expanded;_content.Visible=_expanded;
             _toggle.Text=_expanded?"AI 额度桥  ⌄":"AI 额度桥  ›";
             if(!_expanded)ClearInvitation();
+            UpdateRefreshTimer();
             for(Control? current=_content;current is not null;current=current.Parent)current.PerformLayout();
         };
         void Add(Control c){c.Margin=new(0,4,0,4);_content.Controls.Add(c);}
@@ -64,9 +66,41 @@ internal sealed class BridgePanel:UserControl
         manage.Controls.Add(Button("全部撤销",()=>{if(Confirm("撤销所有设备？所有手机都必须重新扫码。"))Required().RevokeAll();return Task.CompletedTask;}));Add(manage);
         var help=Flow();help.Controls.Add(Button("连接排障",()=>{MessageBox.Show(this,BridgeConnectionGuidance.ManualConnection(_runtime?.Status??new("STOPPED"))+"\n自动发现隔离尚未验证，当前使用二维码直连。\n开机启动可在高级设置或托盘开启；后台启动不会打开 Codex。","连接说明");return Task.CompletedTask;}));
         help.Controls.Add(Button("复制防火墙命令",()=>{Clipboard.SetText(BridgeConnectionGuidance.FirewallCommands(Application.ExecutablePath,(int)_port.Value));MessageBox.Show(this,"已复制。请自行检查后在管理员终端执行；启动器不会提权或修改规则。","防火墙指引");return Task.CompletedTask;}));Add(help);
-        _timer.Tick+=(_,_)=>RefreshState();HandleCreated+=(_,_)=>_timer.Start();
-        VisibleChanged+=(_,_)=>{if(!Visible)ClearInvitation();};
+        _timer.Tick+=(_,_)=>RefreshState();
+        HandleCreated+=(_,_)=>UpdateRefreshTimer();
+        ParentChanged+=(_,_)=>AttachHostForm();
+        VisibleChanged+=(_,_)=>{if(!Visible)ClearInvitation();UpdateRefreshTimer();};
         UiTheme.Style(this);
+    }
+    private void AttachHostForm()
+    {
+        if(_hostForm is not null)
+        {
+            _hostForm.VisibleChanged-=OnHostVisibilityChanged;
+            _hostForm.Resize-=OnHostVisibilityChanged;
+        }
+        _hostForm=FindForm();
+        if(_hostForm is not null)
+        {
+            _hostForm.VisibleChanged+=OnHostVisibilityChanged;
+            _hostForm.Resize+=OnHostVisibilityChanged;
+        }
+        UpdateRefreshTimer();
+    }
+    private void OnHostVisibilityChanged(object? sender,EventArgs e)=>UpdateRefreshTimer();
+    private void UpdateRefreshTimer()
+    {
+        var hostVisible=_hostForm is null||(_hostForm.Visible&&_hostForm.WindowState!=FormWindowState.Minimized);
+        if(!_expanded||!Visible||!hostVisible||!IsHandleCreated||IsDisposed)
+        {
+            _timer.Stop();
+            return;
+        }
+        if(!_timer.Enabled)
+        {
+            RefreshState();
+            _timer.Start();
+        }
     }
     private static UiTheme.WrapPanel Flow()=>new(){Dock=DockStyle.Top,AutoSize=true,BackColor=UiTheme.Card,ForeColor=UiTheme.Text};
     private static void StyleTable(ListView list,int firstColumnWidth)
@@ -186,5 +220,17 @@ internal sealed class BridgePanel:UserControl
         foreach(var row in rows){var item=new ListViewItem(row.Text){Tag=row.Id,Selected=row.Id==selected};list.Items.Add(item);}list.EndUpdate();
     }
     protected override void Dispose(bool disposing)
-    {if(disposing){_timer.Dispose();ClearInvitation();}base.Dispose(disposing);}
+    {
+        if(disposing)
+        {
+            _timer.Stop();_timer.Dispose();ClearInvitation();
+            if(_hostForm is not null)
+            {
+                _hostForm.VisibleChanged-=OnHostVisibilityChanged;
+                _hostForm.Resize-=OnHostVisibilityChanged;
+                _hostForm=null;
+            }
+        }
+        base.Dispose(disposing);
+    }
 }
