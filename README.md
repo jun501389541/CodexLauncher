@@ -82,22 +82,26 @@
 ```powershell
 dotnet build CodexLauncher.slnx
 dotnet run --project CodexLauncher.Tests/CodexLauncher.Tests.csproj
+dotnet publish CodexLauncher.App/CodexLauncher.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist/CodexLauncher-v1.0.3-win-x64-self-contained
 dotnet publish CodexLauncher.App/CodexLauncher.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist/CodexLauncher-v1.0.3-win-x64-portable
 Set-Content -LiteralPath 'dist/CodexLauncher-v1.0.3-win-x64-portable/CodexLauncher.portable' -Value 'portable' -NoNewline -Encoding utf8
+Compress-Archive -Path 'dist/CodexLauncher-v1.0.3-win-x64-self-contained/*' -DestinationPath 'dist/CodexLauncher-v1.0.3-win-x64-self-contained.zip' -CompressionLevel Optimal
+Compress-Archive -Path 'dist/CodexLauncher-v1.0.3-win-x64-portable/*' -DestinationPath 'dist/CodexLauncher-v1.0.3-win-x64-portable.zip' -CompressionLevel Optimal
+Get-FileHash 'dist/CodexLauncher-v1.0.3-win-x64-self-contained.zip' -Algorithm SHA256
 ```
 
-正式发布版和 SHA-256 校验值请前往 [GitHub Releases](https://github.com/jun501389541/CodexLauncher/releases/latest) 下载。v1.0.3 提供 Windows x64 框架依赖版与免安装便携版：框架依赖版需安装 .NET 10 Desktop Runtime 和 ASP.NET Core Runtime；便携版自带运行时，解压到可写目录后运行即可。测试程序不使用第三方测试包；在已安装 Codex 的本机可加 `-- --integration` 检查 MSIX、配套 CLI 定位、额度读取与诊断库只读读取。
+正式发布版和 SHA-256 校验值请前往 [GitHub Releases](https://github.com/jun501389541/CodexLauncher/releases/latest) 下载。Windows x64 自包含版内含 .NET 运行时，无需在目标电脑另行安装 .NET。自包含常规版将设置和日志保存在 `%LOCALAPPDATA%\CodexLauncher`；免安装便携版将它们保存在程序目录的 `portable-data`，解压到可写目录后运行即可。测试程序不使用第三方测试包；在已安装 Codex 的本机可加 `-- --integration` 检查 MSIX、配套 CLI 定位、额度读取与诊断库只读读取。
 
 便携包中的 `CodexLauncher.portable` 标记启用同目录数据模式。启动后，设置、日志与桥接文件写入 `portable-data`；首次启动时可导入现有 AppData 设置和桥接文件。目标目录需要支持写入，建议解压到用户可写的位置。
 
-若 NuGet 暂时不可用，可用仓库中的离线源配置生成依赖本机 .NET 10 Desktop Runtime 的版本：
+若 NuGet 暂时不可用，可用仓库中的离线源配置生成依赖本机 .NET 10 Desktop Runtime 的框架依赖版：
 
 ```powershell
 dotnet restore CodexLauncher.App/CodexLauncher.App.csproj --configfile NuGet.Offline.Config -p:NuGetAudit=false
 dotnet publish CodexLauncher.App/CodexLauncher.App.csproj -c Release --no-restore --self-contained false -o dist/win-x64-framework
 ```
 
-该版本位于 `dist/win-x64-framework/CodexLauncher.exe`，目标机器需要安装 .NET 10 Desktop Runtime。自包含发布需要从 NuGet 获取 .NET 运行时包；只有 SDK 和运行时安装目录时无法离线完成标准自包含发布。
+该框架依赖版位于 `dist/win-x64-framework/CodexLauncher.exe`，目标机器需要安装 .NET 10 Desktop Runtime 和 ASP.NET Core Runtime。自包含发布需要从 NuGet 获取 .NET 运行时包；只有 SDK 和运行时安装目录时无法离线完成标准自包含发布。
 
 旧版窗口仍打开时，先关闭旧启动器，再运行新版本。
 
@@ -112,7 +116,7 @@ dotnet publish CodexLauncher.App/CodexLauncher.App.csproj -c Release --no-restor
 - 固定入口使用现有的 Mihomo 程序，在 `%LOCALAPPDATA%\CodexLauncher\gateway` 保存配置和启动器自己的进程记录。若旧脚本入口已运行，会直接复用它，不再启动第二个。入口在启动器窗口关闭后仍会运行，直到用户在“高级设置”中点“停止固定入口”。
 - 固定入口和启动器的代理环境变量仍不能保证 Codex 桌面版的所有连接都走该代理；若你实测只有 TUN 模式可用，请保留可用的 TUN 并在完全退出 Codex 后重新测试。旧脚本的手动 Windows 代理步骤不由启动器自动执行。
 - 如果网络检查均未通过，仍允许以系统默认网络尝试启动，但界面会提示尚无通过的路径。
-- 框架依赖版的日志和配置分别保存在 `%LOCALAPPDATA%\CodexLauncher\diagnostics.log` 与同目录的 `settings.json`。便携版将配置、日志、桥接设备数据保存在程序目录的 `portable-data` 文件夹；首次运行时会在目标文件不存在时导入当前用户已有的 `settings.json` 和桥接数据。
+- 自包含常规版的日志和配置分别保存在 `%LOCALAPPDATA%\CodexLauncher\diagnostics.log` 与同目录的 `settings.json`。便携版将配置、日志、桥接设备数据保存在程序目录的 `portable-data` 文件夹；首次运行时会在目标文件不存在时导入当前用户已有的 `settings.json` 和桥接数据。
 
 ## 参考案例
 
