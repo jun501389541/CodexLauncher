@@ -102,10 +102,10 @@
 - Describe the setup installer as the normal install option and the existing ZIP as the portable option.
 - State clearly that installed data is in the install directory, legacy data is imported on first launch, and uninstall permanently removes app data and supported legacy data.
 
-- [ ] Update README download/build guidance so it no longer calls the replaced duplicate ZIP the normal install option.
-- [ ] Preserve portable ZIP guidance and existing framework-dependent development/test instructions.
-- [ ] Generate the installer SHA-256 file and verify the sidecar matches a fresh `Get-FileHash` result.
-- [ ] Commit documentation changes after the package behavior is verified.
+- [x] Update README download/build guidance so it no longer calls the replaced duplicate ZIP the normal install option.
+- [x] Preserve portable ZIP guidance and existing framework-dependent development/test instructions.
+- [x] Generate the installer SHA-256 file and verify the sidecar matches a fresh `Get-FileHash` result (`097748EB05DDDA5EACCC7C41F834B5CDD79E3E83AAD2E355485FD6B9301A392E`).
+- [x] Commit and push documentation after the package behavior was verified (`2afdf63`).
 
 ### Task 5: Replace the duplicate public Release asset
 
@@ -116,7 +116,7 @@
 - Upload verified `CodexLauncher-v1.0.3-win-x64-setup.exe` and its SHA-256 sidecar.
 - Remove only `CodexLauncher-v1.0.3-win-x64-self-contained.zip` and its sidecar; keep the portable ZIP, its sidecar, and GitHub source archives.
 
-- [ ] Update Release notes to describe the installer, data location, uninstall deletion behavior, and portable ZIP.
-- [ ] Upload setup EXE and checksum, verify both downloads/asset metadata, then remove the duplicate self-contained ZIP and checksum.
-- [ ] Verify the public release lists the setup and portable ZIP with expected sizes and the published checksum matches the local setup.
-- [ ] Capture the final release page state and report the published links and hash.
+- [x] Update Release notes to describe the installer, data location, uninstall deletion behavior, and portable ZIP.
+- [x] Upload setup EXE and checksum; verify GitHub asset metadata, published digest, and downloadable checksum; remove only the duplicate self-contained ZIP and checksum.
+- [x] Verify the public release lists the setup (44,718,979 bytes; SHA-256 `097748EB05DDDA5EACCC7C41F834B5CDD79E3E83AAD2E355485FD6B9301A392E`) and portable ZIP (61,478,855 bytes); the published sidecar matches the local setup.
+- [x] Capture the final release page state and report the published links and hash.
