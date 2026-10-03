@@ -82,17 +82,23 @@
 ```powershell
 dotnet build CodexLauncher.slnx
 dotnet run --project CodexLauncher.Tests/CodexLauncher.Tests.csproj
-dotnet publish CodexLauncher.App/CodexLauncher.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist/CodexLauncher-v1.0.3-win-x64-self-contained
+dotnet restore CodexLauncher.App/CodexLauncher.App.csproj --runtime win-x64 --locked-mode
+dotnet publish CodexLauncher.App/CodexLauncher.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist/CodexLauncher-v1.0.3-win-x64-self-contained --no-restore
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" installer\CodexLauncher.iss
 dotnet publish CodexLauncher.App/CodexLauncher.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist/CodexLauncher-v1.0.3-win-x64-portable
 Set-Content -LiteralPath 'dist/CodexLauncher-v1.0.3-win-x64-portable/CodexLauncher.portable' -Value 'portable' -NoNewline -Encoding utf8
-Compress-Archive -Path 'dist/CodexLauncher-v1.0.3-win-x64-self-contained/*' -DestinationPath 'dist/CodexLauncher-v1.0.3-win-x64-self-contained.zip' -CompressionLevel Optimal
 Compress-Archive -Path 'dist/CodexLauncher-v1.0.3-win-x64-portable/*' -DestinationPath 'dist/CodexLauncher-v1.0.3-win-x64-portable.zip' -CompressionLevel Optimal
-Get-FileHash 'dist/CodexLauncher-v1.0.3-win-x64-self-contained.zip' -Algorithm SHA256
+$setup = 'dist/CodexLauncher-v1.0.3-win-x64-setup.exe'
+$hash = (Get-FileHash $setup -Algorithm SHA256).Hash
+"$hash  $(Split-Path $setup -Leaf)" | Set-Content "$setup.sha256" -Encoding ascii
+Get-FileHash $setup -Algorithm SHA256
 ```
 
-正式发布版和 SHA-256 校验值请前往 [GitHub Releases](https://github.com/jun501389541/CodexLauncher/releases/latest) 下载。Windows x64 自包含版内含 .NET 运行时，无需在目标电脑另行安装 .NET。自包含常规版将设置和日志保存在 `%LOCALAPPDATA%\CodexLauncher`；免安装便携版将它们保存在程序目录的 `portable-data`，解压到可写目录后运行即可。测试程序不使用第三方测试包；在已安装 Codex 的本机可加 `-- --integration` 检查 MSIX、配套 CLI 定位、额度读取与诊断库只读读取。
+正式发布版和 SHA-256 校验值请前往 [GitHub Releases](https://github.com/jun501389541/CodexLauncher/releases/latest) 下载。普通用户可下载 Windows x64 安装器 `CodexLauncher-v1.0.3-win-x64-setup.exe`；它内含 .NET 运行时，按当前用户安装，不需要管理员权限，也不需要另外安装 .NET。安装器默认安装到 `%LOCALAPPDATA%\Programs\CodexLauncher`。若 Windows 显示 SmartScreen 提示，这是因为安装程序尚未进行代码签名。
 
-便携包中的 `CodexLauncher.portable` 标记启用同目录数据模式。启动后，设置、日志与桥接文件写入 `portable-data`；首次启动时可导入现有 AppData 设置和桥接文件。目标目录需要支持写入，建议解压到用户可写的位置。
+免安装版继续使用 `CodexLauncher-v1.0.3-win-x64-portable.zip`，解压到可写目录后运行即可。安装版和便携版均将设置、日志、桥接数据、代理恢复状态与固定入口数据保存在程序目录的 `portable-data`。安装版首次启动时会从 `%LOCALAPPDATA%\CodexLauncher` 导入受支持的旧设置和桥接文件，且不会覆盖已有文件；升级会保留安装目录数据。卸载会永久删除安装目录及其中数据、旧的 `%LOCALAPPDATA%\CodexLauncher` 数据、快捷方式和启动器自己的开机启动项。测试程序不使用第三方测试包；在已安装 Codex 的本机可加 `-- --integration` 检查 MSIX、配套 CLI 定位、额度读取与诊断库只读读取。
+
+便携包中的 `CodexLauncher.portable` 标记启用同目录数据模式。安装包通过 `CodexLauncher.installed` 标记启用同目录数据模式。首次启动时会导入现有 AppData 设置和桥接文件；目标目录需要支持写入，建议便携版解压到用户可写的位置。
 
 若 NuGet 暂时不可用，可用仓库中的离线源配置生成依赖本机 .NET 10 Desktop Runtime 的框架依赖版：
 
@@ -112,11 +118,11 @@ dotnet publish CodexLauncher.App/CodexLauncher.App.csproj -c Release --no-restor
 - 运行期诊断只读打开本机 Codex 日志库 `%USERPROFILE%\.codex\logs_*.sqlite`（只读、不写、不复制），并且只接受白名单里的 HTTP 与重连事件；对话内容、工具输出和其他实例的日志一律排除。桌面实例无法确认或诊断库不可用时，自动退回只看线路检测。
 - 额度查询从 `%LOCALAPPDATA%\OpenAI\Codex\bin` 查找桌面版配套 CLI，以 `codex app-server` 通过标准输入输出通信，只发送 `initialize`、`account/read`、`account/rateLimits/read` 三个只读方法。不读取、复制或记录账号令牌，也不调用任何模型生成方法。找不到配套 CLI 时不会改用 PATH 中的其他版本。
 - 额度查询进程由启动器自己创建，退出时会一并回收；主窗口关闭到托盘后它继续运行，显式退出后停止。
-- 代理启动会短暂修改当前 Windows 用户的代理环境变量，广播环境变更，并在启动完成后恢复原值。意外中断时，下次打开启动器会利用 `%LOCALAPPDATA%\CodexLauncher\proxy-recovery.json` 恢复；若变量已被其他程序改动，不会覆盖那次改动。此短暂窗口内启动的其他程序也可能继承代理变量。
-- 固定入口使用现有的 Mihomo 程序，在 `%LOCALAPPDATA%\CodexLauncher\gateway` 保存配置和启动器自己的进程记录。若旧脚本入口已运行，会直接复用它，不再启动第二个。入口在启动器窗口关闭后仍会运行，直到用户在“高级设置”中点“停止固定入口”。
+- 代理启动会短暂修改当前 Windows 用户的代理环境变量，广播环境变更，并在启动完成后恢复原值。意外中断时，下次打开启动器会利用数据目录中的 `proxy-recovery.json` 恢复；若变量已被其他程序改动，不会覆盖那次改动。此短暂窗口内启动的其他程序也可能继承代理变量。
+- 固定入口使用现有的 Mihomo 程序，在数据目录的 `gateway` 保存配置和启动器自己的进程记录。若旧脚本入口已运行，会直接复用它，不再启动第二个。入口在启动器窗口关闭后仍会运行，直到用户在“高级设置”中点“停止固定入口”。
 - 固定入口和启动器的代理环境变量仍不能保证 Codex 桌面版的所有连接都走该代理；若你实测只有 TUN 模式可用，请保留可用的 TUN 并在完全退出 Codex 后重新测试。旧脚本的手动 Windows 代理步骤不由启动器自动执行。
 - 如果网络检查均未通过，仍允许以系统默认网络尝试启动，但界面会提示尚无通过的路径。
-- 自包含常规版的日志和配置分别保存在 `%LOCALAPPDATA%\CodexLauncher\diagnostics.log` 与同目录的 `settings.json`。便携版将配置、日志、桥接设备数据保存在程序目录的 `portable-data` 文件夹；首次运行时会在目标文件不存在时导入当前用户已有的 `settings.json` 和桥接数据。
+- 安装版与便携版将配置、日志、桥接设备数据、代理恢复状态和固定入口文件保存在程序目录的 `portable-data` 文件夹；首次运行时会在目标文件不存在时导入当前用户已有的 `settings.json` 和桥接数据。未带安装或便携标记的开发构建仍使用 `%LOCALAPPDATA%\CodexLauncher`。
 
 ## 参考案例
 
