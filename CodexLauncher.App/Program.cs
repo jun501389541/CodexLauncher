@@ -27,8 +27,9 @@ internal static class Program
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {
+            var packageName = LauncherDataPaths.IsPortable ? "便携版" : "安装版";
             MessageBox.Show(
-                $"便携版无法在程序目录写入数据：\r\n{LauncherDataPaths.DataDirectory}\r\n\r\n请将整个程序文件夹解压到可写位置后重试。\r\n\r\n{exception.Message}",
+                $"{packageName}无法在程序数据目录写入文件：\r\n{LauncherDataPaths.DataDirectory}\r\n\r\n请将程序放在当前用户可写的位置后重试。\r\n\r\n{exception.Message}",
                 "Codex 启动器", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }

@@ -123,6 +123,7 @@ tests.AddRange(BridgeStageThreeTests.All);
 tests.AddRange(BridgeStageTwoTests.All);
 tests.AddRange(BridgeStageOneTests.All);
 tests.AddRange(BridgeDependencyTests.All);
+tests.AddRange(LauncherDataPathsTests.All);
 if (args.Contains("--bridge-only", StringComparer.OrdinalIgnoreCase))
     tests = BridgeStageOneTests.All.Concat(BridgeDependencyTests.All).Concat(BridgeStageTwoTests.All).Concat(BridgeStageThreeTests.All).Concat(BridgeStageFourTests.All).ToList();
 if (args.Contains("--bridge-stage3", StringComparer.OrdinalIgnoreCase))

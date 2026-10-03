@@ -6,6 +6,9 @@
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="CodexLauncher.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <!-- 只读读取本机 Codex 诊断库；版本与 .NET 10 目标框架对齐，原生库随自包含发布一起提供。 -->
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
   </ItemGroup>

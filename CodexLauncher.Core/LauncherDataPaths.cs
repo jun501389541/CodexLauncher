@@ -1,39 +1,51 @@
 namespace CodexLauncher.Core;
 
-/// <summary>Resolves app-owned data paths for the installed and portable packages.</summary>
+/// <summary>Resolves app-owned data paths for installed, portable, and framework-dependent packages.</summary>
 public static class LauncherDataPaths
 {
     public const string PortableMarkerFileName = "CodexLauncher.portable";
+    public const string InstalledMarkerFileName = "CodexLauncher.installed";
 
     private const string PortableDataFolderName = "portable-data";
     private const string MigrationMarkerFileName = ".appdata-imported";
-    private static readonly string ExecutableDirectory = AppContext.BaseDirectory;
-    private static readonly string LegacyDataDirectory = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CodexLauncher");
+    private static readonly LauncherDataLayout Current = ResolveForDirectory(
+        AppContext.BaseDirectory,
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
 
-    static LauncherDataPaths()
+    public static bool IsPortable => Current.IsPortable;
+    public static string DataDirectory => Current.DataDirectory;
+    public static string SettingsPath => Current.SettingsPath;
+    public static string BridgeDirectory => Current.BridgeDirectory;
+
+    internal static LauncherDataLayout ResolveForDirectory(string executableDirectory, string localAppDataDirectory)
     {
-        IsPortable = File.Exists(Path.Combine(ExecutableDirectory, PortableMarkerFileName));
-        DataDirectory = IsPortable
-            ? Path.Combine(ExecutableDirectory, PortableDataFolderName)
-            : LegacyDataDirectory;
-        SettingsPath = Path.Combine(DataDirectory, "settings.json");
-        BridgeDirectory = Path.Combine(DataDirectory, "bridge");
+        var isPortable = File.Exists(Path.Combine(executableDirectory, PortableMarkerFileName));
+        var isInstalled = File.Exists(Path.Combine(executableDirectory, InstalledMarkerFileName));
+        var usesInstallLocalData = isPortable || isInstalled;
+        var legacyDataDirectory = Path.Combine(localAppDataDirectory, "CodexLauncher");
+        var dataDirectory = usesInstallLocalData
+            ? Path.Combine(executableDirectory, PortableDataFolderName)
+            : legacyDataDirectory;
+
+        return new LauncherDataLayout(
+            isPortable,
+            usesInstallLocalData,
+            dataDirectory,
+            Path.Combine(dataDirectory, "settings.json"),
+            Path.Combine(dataDirectory, "bridge"),
+            legacyDataDirectory);
     }
 
-    public static bool IsPortable { get; }
-    public static string DataDirectory { get; }
-    public static string SettingsPath { get; }
-    public static string BridgeDirectory { get; }
+    /// <summary>Checks app-local storage and imports existing user settings once, when present.</summary>
+    public static void InitializeForCurrentProcess() => InitializeForLayout(Current);
 
-    /// <summary>Checks portable storage and imports the existing user settings once, when present.</summary>
-    public static void InitializeForCurrentProcess()
+    internal static void InitializeForLayout(LauncherDataLayout layout)
     {
-        if (!IsPortable) return;
+        if (!layout.UsesInstallLocalData) return;
 
-        Directory.CreateDirectory(DataDirectory);
-        EnsureWritable(DataDirectory);
-        ImportLegacyData();
+        Directory.CreateDirectory(layout.DataDirectory);
+        EnsureWritable(layout.DataDirectory);
+        ImportLegacyData(layout.DataDirectory, layout.LegacyDataDirectory);
     }
 
     private static void EnsureWritable(string directory)
@@ -54,23 +66,25 @@ public static class LauncherDataPaths
         }
     }
 
-    private static void ImportLegacyData()
+    private static void ImportLegacyData(string dataDirectory, string legacyDataDirectory)
     {
-        var migrationMarker = Path.Combine(DataDirectory, MigrationMarkerFileName);
+        var migrationMarker = Path.Combine(dataDirectory, MigrationMarkerFileName);
         if (File.Exists(migrationMarker)) return;
 
-        var legacySettings = Path.Combine(LegacyDataDirectory, "settings.json");
-        if (!File.Exists(SettingsPath) && File.Exists(legacySettings))
-            File.Copy(legacySettings, SettingsPath);
+        var settingsPath = Path.Combine(dataDirectory, "settings.json");
+        var legacySettings = Path.Combine(legacyDataDirectory, "settings.json");
+        if (!File.Exists(settingsPath) && File.Exists(legacySettings))
+            File.Copy(legacySettings, settingsPath);
 
-        var legacyBridgeDirectory = Path.Combine(LegacyDataDirectory, "bridge");
+        var bridgeDirectory = Path.Combine(dataDirectory, "bridge");
+        var legacyBridgeDirectory = Path.Combine(legacyDataDirectory, "bridge");
         if (Directory.Exists(legacyBridgeDirectory))
         {
-            Directory.CreateDirectory(BridgeDirectory);
+            Directory.CreateDirectory(bridgeDirectory);
             foreach (var fileName in new[] { "identity.dat", "devices.dat", "grants.dat", "preferences.dat" })
             {
                 var source = Path.Combine(legacyBridgeDirectory, fileName);
-                var destination = Path.Combine(BridgeDirectory, fileName);
+                var destination = Path.Combine(bridgeDirectory, fileName);
                 if (!File.Exists(destination) && File.Exists(source)) File.Copy(source, destination);
             }
         }
@@ -78,3 +92,11 @@ public static class LauncherDataPaths
         File.WriteAllText(migrationMarker, "Imported settings and bridge state from LocalAppData.");
     }
 }
+
+internal sealed record LauncherDataLayout(
+    bool IsPortable,
+    bool UsesInstallLocalData,
+    string DataDirectory,
+    string SettingsPath,
+    string BridgeDirectory,
+    string LegacyDataDirectory);
