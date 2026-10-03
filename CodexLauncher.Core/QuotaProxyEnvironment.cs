@@ -8,8 +8,7 @@ namespace CodexLauncher.Core;
 /// </summary>
 public static class QuotaProxyEnvironment
 {
-    private static readonly string SettingsPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CodexLauncher", "settings.json");
+    private static readonly string SettingsPath = LauncherDataPaths.SettingsPath;
 
     /// <summary>解析结果：来源、代理与要注入子进程的环境键；直连时环境为空字典。</summary>
     public sealed record Resolution(string? Source, ProxyAddress? Proxy, IReadOnlyDictionary<string, string> Environment)

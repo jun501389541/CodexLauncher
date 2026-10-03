@@ -14,6 +14,12 @@
           "Tmds.LibC": "0.2.0"
         }
       },
+      "Microsoft.NET.ILLink.Tasks": {
+        "type": "Direct",
+        "requested": "[10.0.11, )",
+        "resolved": "10.0.11",
+        "contentHash": "IBf7lbovvjGWVWXZX5cJ/cO0WXbId0Zq4BuSeT94mGZuOAP66oMeH9PTBZ9Jpp3Jb6jtK0qm/NyUbPRo1gC/wQ=="
+      },
       "QRCoder": {
         "type": "Direct",
         "requested": "[1.8.0, )",
@@ -122,6 +128,18 @@
         "dependencies": {
           "Microsoft.Data.Sqlite": "[10.0.12, )"
         }
+      }
+    },
+    "net10.0-windows7.0/win-x64": {
+      "SQLitePCLRaw.lib.e_sqlite3": {
+        "type": "Transitive",
+        "resolved": "2.1.12",
+        "contentHash": "fWi8Dbknuhgg72fWinIdjXVaqO1hHL4YBBwVLnr7e1c9TAZwJ0QE38j9syW1hwx6HaqEVTwI+O07WPdZn8Rp0w=="
+      },
+      "Tmds.LibC": {
+        "type": "Transitive",
+        "resolved": "0.2.0",
+        "contentHash": "+RvLuNHOLW7cxzgDe9yHLoayBgjsuH2/gJtJnuVMxweKrxxYT6TwQNAmt06SFWpjwk68aRcwwD4FfMMA6tZvVA=="
       }
     }
   }

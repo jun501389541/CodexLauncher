@@ -278,7 +278,7 @@ public sealed class MainForm : Form
         AutoScaleMode = AutoScaleMode.Dpi;
         BackColor = UiTheme.Window;
 
-        var dataDir = services?.DataDirectory??Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CodexLauncher");
+        var dataDir = services?.DataDirectory??LauncherDataPaths.DataDirectory;
         _settings = new LauncherSettingsStore(Path.Combine(dataDir, "settings.json"));
         var detector = new CodexProcessDetector();
         _detector = detector;
@@ -742,7 +742,7 @@ public sealed class MainForm : Form
     {
         if(_bridge is not null)return;
         if(_quota is null)throw new InvalidOperationException("QUOTA_OWNER_REQUIRED");
-        _bridge=_services?.BridgeFactory(_quota)??new BridgeRuntime(BridgeIdentityStore.DefaultDirectory,_quota,logger:_logger);
+        _bridge=_services?.BridgeFactory(_quota)??new BridgeRuntime(LauncherDataPaths.BridgeDirectory,_quota,logger:_logger);
         _bridgePanel.Bind(_bridge);
     }
     private async Task ApplyBridgeAsync(bool enabled,string? adapter,int port)

@@ -6,8 +6,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>CodexLauncher</AssemblyName>
-    <Version>1.0.2</Version>
-    <FileVersion>1.0.2.0</FileVersion>
+    <Version>1.0.3</Version>
+    <FileVersion>1.0.3.0</FileVersion>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <!-- 每显示器 DPI：100%—200% 缩放下由系统按显示器重算布局，避免位图拉伸模糊。 -->
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>

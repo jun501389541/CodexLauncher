@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Security.Principal;
 using System.Text.Json;
+using CodexLauncher.Core;
 
 namespace CodexLauncher.App;
 
@@ -22,7 +23,7 @@ internal sealed class BridgeIdentity(string bridgeId, byte[] mappingKey, X509Cer
 internal sealed class BridgeIdentityStore(string directory)
 {
     private sealed record Payload(int Version, string BridgeId, byte[] MappingKey, byte[] Pfx);
-    public static string DefaultDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CodexLauncher", "bridge");
+    public static string DefaultDirectory => LauncherDataPaths.BridgeDirectory;
     public BridgeIdentity LoadOrCreate()
     {
         var path = Path.Combine(directory, "identity.dat");

@@ -82,10 +82,13 @@
 ```powershell
 dotnet build CodexLauncher.slnx
 dotnet run --project CodexLauncher.Tests/CodexLauncher.Tests.csproj
-dotnet publish CodexLauncher.App/CodexLauncher.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist/win-x64-monitoring
+dotnet publish CodexLauncher.App/CodexLauncher.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist/CodexLauncher-v1.0.3-win-x64-portable
+Set-Content -LiteralPath 'dist/CodexLauncher-v1.0.3-win-x64-portable/CodexLauncher.portable' -Value 'portable' -NoNewline -Encoding utf8
 ```
 
-正式发布版和 SHA-256 校验值请前往 [GitHub Releases](https://github.com/jun501389541/CodexLauncher/releases/latest) 下载。v1.0.2 提供 Windows x64 框架依赖包，目标机器需安装 .NET 10 Desktop Runtime 与 ASP.NET Core Runtime。测试程序不使用第三方测试包；在已安装 Codex 的本机可加 `-- --integration` 检查 MSIX、配套 CLI 定位、额度读取与诊断库只读读取。
+正式发布版和 SHA-256 校验值请前往 [GitHub Releases](https://github.com/jun501389541/CodexLauncher/releases/latest) 下载。v1.0.3 提供 Windows x64 框架依赖版与免安装便携版：框架依赖版需安装 .NET 10 Desktop Runtime 和 ASP.NET Core Runtime；便携版自带运行时，解压到可写目录后运行即可。测试程序不使用第三方测试包；在已安装 Codex 的本机可加 `-- --integration` 检查 MSIX、配套 CLI 定位、额度读取与诊断库只读读取。
+
+便携包中的 `CodexLauncher.portable` 标记启用同目录数据模式。启动后，设置、日志与桥接文件写入 `portable-data`；首次启动时可导入现有 AppData 设置和桥接文件。目标目录需要支持写入，建议解压到用户可写的位置。
 
 若 NuGet 暂时不可用，可用仓库中的离线源配置生成依赖本机 .NET 10 Desktop Runtime 的版本：
 
@@ -109,11 +112,11 @@ dotnet publish CodexLauncher.App/CodexLauncher.App.csproj -c Release --no-restor
 - 固定入口使用现有的 Mihomo 程序，在 `%LOCALAPPDATA%\CodexLauncher\gateway` 保存配置和启动器自己的进程记录。若旧脚本入口已运行，会直接复用它，不再启动第二个。入口在启动器窗口关闭后仍会运行，直到用户在“高级设置”中点“停止固定入口”。
 - 固定入口和启动器的代理环境变量仍不能保证 Codex 桌面版的所有连接都走该代理；若你实测只有 TUN 模式可用，请保留可用的 TUN 并在完全退出 Codex 后重新测试。旧脚本的手动 Windows 代理步骤不由启动器自动执行。
 - 如果网络检查均未通过，仍允许以系统默认网络尝试启动，但界面会提示尚无通过的路径。
-- 日志在 `%LOCALAPPDATA%\CodexLauncher\diagnostics.log`，只包含阶段、状态、耗时和错误类型；配置保存在同目录的 `settings.json`。
+- 框架依赖版的日志和配置分别保存在 `%LOCALAPPDATA%\CodexLauncher\diagnostics.log` 与同目录的 `settings.json`。便携版将配置、日志、桥接设备数据保存在程序目录的 `portable-data` 文件夹；首次运行时会在目标文件不存在时导入当前用户已有的 `settings.json` 和桥接数据。
 
 ## 参考案例
 
-AI Usage Bridge 已接入主窗口“AI 额度桥”分区，包括网卡/端口设置、二维码、本机审批、设备管理与后台启动。参见 [对接说明](docs/bridge/README.md)、[阶段五记录](docs/bridge/stage-five-report.md) 与[阶段六交付报告](docs/bridge/stage-six-report.md)。阶段六已在 `dist/win-x64-bridge` 生成 win-x64 自包含发布候选；完整文件清单与 SHA-256 见候选目录内的 `SHA256SUMS.txt`。共享仍默认关闭；mDNS 因完整出站隔离未验证而保持阻塞，真实 Windows 登录/登出、真实账号查询和手机局域网流程仍待验收。自包含候选无需另装 .NET 运行时；框架依赖版本需要 .NET 10 Desktop 与 ASP.NET Core Runtime。
+AI Usage Bridge 已接入主窗口“AI 额度桥”分区，包括网卡/端口设置、二维码、本机审批、设备管理与后台启动。参见 [对接说明](docs/bridge/README.md)、[阶段五记录](docs/bridge/stage-five-report.md) 与[阶段六交付报告](docs/bridge/stage-six-report.md)。共享仍默认关闭；mDNS 因完整出站隔离未验证而保持阻塞，真实 Windows 登录/登出、真实账号查询和手机局域网流程仍待验收。便携桥接身份使用 Windows DPAPI，跨 Windows 账户或设备移动后需要重新配对；开机启动是当前用户注册表项，移动程序目录后需要重新启用。
 
 项目独立实现，参考了 [codex-proxy-switcher-win](https://github.com/hloolx/codex-proxy-switcher-win) 的 MSIX 启动思路、[codex-no-tun](https://github.com/lisijia666-sketch/codex-no-tun) 的诊断流程，以及 [OpenAI 官方命令参考](https://learn.chatgpt.com/docs/developer-commands?surface=cli) 中的 CLI 检测命令。
 
