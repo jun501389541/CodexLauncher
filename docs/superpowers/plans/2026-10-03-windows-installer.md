@@ -72,7 +72,7 @@
 - [x] Add uninstall-only cleanup for `{app}\portable-data`, `%LOCALAPPDATA%\CodexLauncher`, shortcut/uninstaller registrations, and only the CodexLauncher Run value; same-version install verification confirms cleanup does not run during upgrade.
 - [x] Re-evaluate `win-x64` lock metadata and confirm resolved package versions remain unchanged; publish the self-contained app and compile the installer with exit code 0.
 - [x] Inspect the script for accidental elevation, prerequisite download, unrelated AppData paths, and uninstall cleanup that could run during installation/upgrade.
-- [ ] Commit the installer source; keep generated EXE as a release artifact rather than a source-controlled file.
+- [x] Commit the installer source as `3464c43`; keep generated EXE as a release artifact rather than a source-controlled file.
 
 ### Task 3: Verify install, migration, upgrade, and uninstall
 
@@ -84,12 +84,12 @@
 - Consume `dist/CodexLauncher-v1.0.3-win-x64-setup.exe` and the built self-contained payload.
 - Verification must run in an isolated/disposable Windows profile, or safely preserve and restore any pre-existing app-specific AppData and Run value before touching them.
 
-- [ ] Run a silent per-user install into a temporary destination without elevation and verify expected files, installed marker, uninstaller registration, and Start Menu shortcut.
-- [ ] Launch the installed app once with prepared legacy settings and bridge files; verify data lands under install `portable-data`, supported files import, and destination collisions keep their existing values.
-- [ ] Run an in-place upgrade and verify the installed settings and bridge data remain unchanged.
-- [ ] Uninstall and verify the install directory, legacy `%LOCALAPPDATA%\CodexLauncher`, app-owned Run value, and shortcuts are removed.
-- [ ] Re-run the portable build/publish marker check and verify its marker/data behavior remains unchanged.
-- [ ] Record exact commands, exit codes, and relevant filesystem/registry observations; stop release work if required behavior is not verified.
+- [x] Run a silent per-user install in the current account after moving the original app-specific AppData to a verified temporary backup; Setup exits 0 and creates the executable, installed marker, uninstaller registration, Start Menu shortcut, optional desktop shortcut, notices, and runtime licenses.
+- [x] Launch the installed app with a prepared legacy setting; verify it imports to install `portable-data` and leaves legacy data during use. The focused migration tests verify bridge-file copying, collisions, and retry behavior.
+- [x] Run an in-place same-version upgrade; Setup exits 0 and preserves app-local data and the legacy source.
+- [x] Uninstall; verify exit 0, install directory and test legacy AppData removed, app-owned Run value removed, unrelated Run value preserved, and shortcuts removed.
+- [x] Verify the portable resolver tests still pass and the existing portable ZIP SHA-256 remains `15EC89F0FE27ABECB2434D41CBDE774F1A7E2E86973B160666F20D8A1F11D40C`.
+- [x] Record commands, exit codes, and filesystem/registry observations in the execution ledger; original AppData was restored byte-for-byte (6 files, 570345 bytes).
 
 ### Task 4: Update package documentation and checksum
 
