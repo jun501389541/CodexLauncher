@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:codex-launcher:bridge:v1:usage",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "bridgeId",
+    "providerId",
+    "accountId",
+    "displayName",
+    "status",
+    "quotaWindows",
+    "updatedAt",
+    "dataTimestamp",
+    "sourceTimestamp",
+    "isStale",
+    "errorCode"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "bridgeId": {
+      "type": "string"
+    },
+    "providerId": {
+      "const": "codex"
+    },
+    "accountId": {
+      "type": "string"
+    },
+    "displayName": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "OK",
+        "STALE",
+        "AUTH_REQUIRED",
+        "NO_DATA",
+        "NETWORK_ERROR",
+        "UNSUPPORTED"
+      ]
+    },
+    "quotaWindows": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/UsageWindow"
+      }
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "dataTimestamp": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "sourceTimestamp": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "isStale": {
+      "type": "boolean"
+    },
+    "errorCode": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "$defs": {
+    "UsageWindow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label",
+        "usedPercent",
+        "remainingPercent",
+        "windowMinutes",
+        "resetAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "usedPercent": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "remainingPercent": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100
+        },
+        "windowMinutes": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "resetAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time",
+          "pattern": "Z$"
+        }
+      }
+    }
+  }
+}

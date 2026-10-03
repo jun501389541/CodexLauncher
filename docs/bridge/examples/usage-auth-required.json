@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "bridgeId": "00000000-0000-4000-8000-000000000001",
+  "providerId": "codex",
+  "accountId": "7777777777777777777777777777777777777777777777777777777777777777",
+  "displayName": "Codex账号",
+  "status": "AUTH_REQUIRED",
+  "quotaWindows": [],
+  "updatedAt": "2026-10-02T08:00:00Z",
+  "dataTimestamp": null,
+  "sourceTimestamp": null,
+  "isStale": false,
+  "errorCode": null
+}

@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "bridgeId": "00000000-0000-4000-8000-000000000001",
+  "providerId": "codex",
+  "accountId": "7777777777777777777777777777777777777777777777777777777777777777",
+  "displayName": "Codex账号",
+  "status": "OK",
+  "quotaWindows": [
+    {
+      "id": "codex:primary",
+      "label": "5 小时",
+      "usedPercent": 12.5,
+      "remainingPercent": 87.5,
+      "windowMinutes": 300,
+      "resetAt": "2026-10-02T12:00:00Z"
+    },
+    {
+      "id": "codex_other:secondary",
+      "label": "窗口长度未知",
+      "usedPercent": null,
+      "remainingPercent": null,
+      "windowMinutes": null,
+      "resetAt": null
+    }
+  ],
+  "updatedAt": "2026-10-02T08:00:00Z",
+  "dataTimestamp": "2026-10-02T08:00:00Z",
+  "sourceTimestamp": null,
+  "isStale": false,
+  "errorCode": null
+}

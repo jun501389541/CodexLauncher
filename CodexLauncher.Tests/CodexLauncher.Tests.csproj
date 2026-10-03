@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <!-- 菜单配色测试需要真实创建 ContextMenuStrip，因此测试进程也要引用 WinForms。 -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="../CodexLauncher.Core/CodexLauncher.Core.csproj" />
+    <!-- 菜单不在控件树里，主题重新上色是 App 层行为，必须直接测 App 的 UiTheme。 -->
+    <ProjectReference Include="../CodexLauncher.App/CodexLauncher.App.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="../docs/bridge/usage-result.schema.json" Link="bridge-contracts/usage-result.schema.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

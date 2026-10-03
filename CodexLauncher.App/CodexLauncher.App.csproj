@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>CodexLauncher</AssemblyName>
+    <Version>1.0.2</Version>
+    <FileVersion>1.0.2.0</FileVersion>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <!-- 每显示器 DPI：100%—200% 缩放下由系统按显示器重算布局，避免位图拉伸模糊。 -->
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="QRCoder" Version="1.8.0" />
+    <PackageReference Include="Makaretu.Dns.Multicast" Version="0.27.0" />
+    <ProjectReference Include="../CodexLauncher.Core/CodexLauncher.Core.csproj" />
+    <!-- 测试进程要直接验证菜单配色契约（UiTheme 为 internal）。 -->
+    <InternalsVisibleTo Include="CodexLauncher.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- ⑦Codex 云朵字形：1024px 透明底 PNG 随程序集分发，不依赖本机安装 Codex。 -->
+    <EmbeddedResource Include="Assets\codex-logo.png" LogicalName="CodexLauncher.App.Assets.codex-logo.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="../docs/bridge/THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../docs/bridge/licenses/*.txt" Link="licenses/%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

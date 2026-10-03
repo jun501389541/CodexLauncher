@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="CodexLauncher.App/CodexLauncher.App.csproj" />
+  <Project Path="CodexLauncher.Core/CodexLauncher.Core.csproj" />
+  <Project Path="CodexLauncher.Tests/CodexLauncher.Tests.csproj" />
+</Solution>

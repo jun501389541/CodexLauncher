@@ -1,0 +1,902 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Codex Launcher AI Usage Bridge",
+    "version": "1.0.0",
+    "description": "Full v1 contract. The embedded HTTPS read/refresh and pairing modules are implemented; launcher UI activation and LAN discovery remain pending. HTTPS only; single Codex provider/current account."
+  },
+  "servers": [
+    {
+      "url": "https://192.0.2.1:43189",
+      "description": "Documentation-only synthetic address; use user-selected LAN address at runtime"
+    }
+  ],
+  "security": [
+    {
+      "deviceBearer": []
+    }
+  ],
+  "paths": {
+    "/v1/device": {
+      "get": {
+        "operationId": "devicePage",
+        "security": [],
+        "description": "Public shell: connection address, server certificate fingerprint, pairing state/form. No quota without device credential. Browser compares fingerprint manually (C-2).",
+        "responses": {
+          "200": {
+            "description": "Public HTML shell",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/health": {
+      "get": {
+        "operationId": "health",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Service identity and state only; no accounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/pair": {
+      "post": {
+        "operationId": "requestPairing",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Invitation atomically consumed; wait for computer approval",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PAIR_TOKEN_INVALID or DEVICE_NAME_INVALID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PAIR_TOKEN_INVALID, PAIR_TOKEN_REPLAYED, DEVICE_LIMIT_REACHED or PAIR_CAPACITY_REACHED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PAIR_EXPIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "REQUEST_TOO_LARGE (16 KiB)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "PAIR_RATE_LIMITED (5/source/minute)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds until retry",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PAIRING_UNAVAILABLE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/pair/{id}": {
+      "get": {
+        "operationId": "pairStatus",
+        "security": [
+          {
+            "pairSessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Pairing session ID; session credential belongs only in Authorization header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Approved may include deviceToken for up to 2 minutes. Delivered never includes cleartext token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "PAIR_SESSION_INVALID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PAIR_EXPIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PAIRING_UNAVAILABLE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/pair/{id}/ack": {
+      "post": {
+        "operationId": "ackPairing",
+        "security": [
+          {
+            "pairSessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Pairing session ID; session credential belongs only in Authorization header"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Delivery acknowledged; device token cleartext erased; repeated ACK is idempotent within session lifetime"
+          },
+          "401": {
+            "description": "PAIR_SESSION_INVALID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PAIR_NOT_APPROVED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PAIR_EXPIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PAIRING_UNAVAILABLE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/providers": {
+      "get": {
+        "operationId": "providers",
+        "responses": {
+          "200": {
+            "description": "Single Codex provider",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Provider"
+                  },
+                  "maxItems": 1
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "DEVICE_INVALID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "DEVICE_RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds until retry",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts": {
+      "get": {
+        "operationId": "accounts",
+        "responses": {
+          "200": {
+            "description": "0 or 1 current authorized account; unknown identity returns []",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Account"
+                  },
+                  "maxItems": 1
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "DEVICE_INVALID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ACCOUNT_REAUTHORIZATION_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "DEVICE_RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds until retry",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{id}/usage": {
+      "get": {
+        "operationId": "usage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Bridge-local anonymous account ID, never a platform ID"
+          }
+        ],
+        "description": "Cache-only read, no upstream query. Missing values remain null; reset expiry never fabricates 100%.",
+        "responses": {
+          "200": {
+            "description": "Read authorized cached usage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "DEVICE_INVALID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ACCOUNT_REAUTHORIZATION_REQUIRED or ACCOUNT_UNIDENTIFIABLE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ACCOUNT_CHANGED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "DEVICE_RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds until retry",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{id}/refresh": {
+      "post": {
+        "operationId": "refresh",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Bridge-local anonymous account ID, never a platform ID"
+          }
+        ],
+        "description": "Return current UsageResult immediately; trigger shared manual refresh in background. Global minimum interval 10 seconds. HTTP disconnect never cancels upstream.",
+        "responses": {
+          "202": {
+            "description": "Current snapshot; use subsequent GET for updated data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "DEVICE_INVALID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ACCOUNT_REAUTHORIZATION_REQUIRED or ACCOUNT_UNIDENTIFIABLE",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ACCOUNT_CHANGED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "DEVICE_RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Integer seconds until retry",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "deviceBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "256-bit device credential. Only Authorization header. Server stores hash only."
+      },
+      "pairSessionBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Dedicated random session credential, not invitation or device token. Only Authorization header."
+      }
+    },
+    "schemas": {
+      "UsageWindow": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "label",
+          "usedPercent",
+          "remainingPercent",
+          "windowMinutes",
+          "resetAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "usedPercent": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "remainingPercent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 100
+          },
+          "windowMinutes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "resetAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "pattern": "Z$"
+          }
+        }
+      },
+      "UsageResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schemaVersion",
+          "bridgeId",
+          "providerId",
+          "accountId",
+          "displayName",
+          "status",
+          "quotaWindows",
+          "updatedAt",
+          "dataTimestamp",
+          "sourceTimestamp",
+          "isStale",
+          "errorCode"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "const": 1
+          },
+          "bridgeId": {
+            "type": "string"
+          },
+          "providerId": {
+            "const": "codex"
+          },
+          "accountId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "OK",
+              "STALE",
+              "AUTH_REQUIRED",
+              "NO_DATA",
+              "NETWORK_ERROR",
+              "UNSUPPORTED"
+            ]
+          },
+          "quotaWindows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UsageWindow"
+            }
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "Z$"
+          },
+          "dataTimestamp": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "pattern": "Z$"
+          },
+          "sourceTimestamp": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "pattern": "Z$"
+          },
+          "isStale": {
+            "type": "boolean"
+          },
+          "errorCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "errorCode"
+        ],
+        "properties": {
+          "errorCode": {
+            "type": "string"
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schemaVersion",
+          "bridgeId",
+          "version",
+          "status"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "const": 1
+          },
+          "bridgeId": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "READY",
+              "PAUSED"
+            ]
+          }
+        }
+      },
+      "Provider": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "providerId",
+          "capabilities"
+        ],
+        "properties": {
+          "providerId": {
+            "const": "codex"
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "usage",
+                "refresh"
+              ]
+            },
+            "uniqueItems": true
+          }
+        }
+      },
+      "Account": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "providerId",
+          "accountId",
+          "displayName"
+        ],
+        "properties": {
+          "providerId": {
+            "const": "codex"
+          },
+          "accountId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          }
+        }
+      },
+      "Invitation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schemaVersion",
+          "bridgeId",
+          "endpoint",
+          "certificateSha256",
+          "pairToken",
+          "expiresAt"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "const": 1
+          },
+          "bridgeId": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://"
+          },
+          "certificateSha256": {
+            "type": "string",
+            "pattern": "^[A-Fa-f0-9]{64}$"
+          },
+          "pairToken": {
+            "type": "string",
+            "minLength": 43
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "Z$"
+          }
+        }
+      },
+      "PairRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "pairToken",
+          "deviceName"
+        ],
+        "properties": {
+          "pairToken": {
+            "type": "string",
+            "minLength": 43
+          },
+          "deviceName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        }
+      },
+      "PairAccepted": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "pairId",
+          "sessionToken",
+          "state",
+          "expiresAt"
+        ],
+        "properties": {
+          "pairId": {
+            "type": "string"
+          },
+          "sessionToken": {
+            "type": "string",
+            "minLength": 43
+          },
+          "state": {
+            "const": "PendingApproval"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "Z$"
+          }
+        }
+      },
+      "PairStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "pairId",
+          "state",
+          "deviceId",
+          "deviceToken",
+          "expiresAt"
+        ],
+        "properties": {
+          "pairId": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "PendingApproval",
+              "Approved",
+              "Delivered",
+              "Rejected"
+            ]
+          },
+          "deviceId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceToken": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "Z$"
+          }
+        }
+      }
+    }
+  }
+}
