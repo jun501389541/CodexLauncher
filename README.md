@@ -85,7 +85,7 @@ dotnet run --project CodexLauncher.Tests/CodexLauncher.Tests.csproj
 dotnet publish CodexLauncher.App/CodexLauncher.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist/win-x64-monitoring
 ```
 
-正式发布版和 SHA-256 校验值请前往 [GitHub Releases](https://github.com/jun501389541/CodexLauncher/releases/latest) 下载。win-x64 自包含发布包无需另装 .NET 运行时。测试程序不使用第三方测试包；在已安装 Codex 的本机可加 `-- --integration` 检查 MSIX、配套 CLI 定位、额度读取与诊断库只读读取。
+正式发布版和 SHA-256 校验值请前往 [GitHub Releases](https://github.com/jun501389541/CodexLauncher/releases/latest) 下载。v1.0.2 提供 Windows x64 框架依赖包，目标机器需安装 .NET 10 Desktop Runtime 与 ASP.NET Core Runtime。测试程序不使用第三方测试包；在已安装 Codex 的本机可加 `-- --integration` 检查 MSIX、配套 CLI 定位、额度读取与诊断库只读读取。
 
 若 NuGet 暂时不可用，可用仓库中的离线源配置生成依赖本机 .NET 10 Desktop Runtime 的版本：
 
