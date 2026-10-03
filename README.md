@@ -83,20 +83,23 @@
 dotnet build CodexLauncher.slnx
 dotnet run --project CodexLauncher.Tests/CodexLauncher.Tests.csproj
 dotnet restore CodexLauncher.App/CodexLauncher.App.csproj --runtime win-x64 --locked-mode
-dotnet publish CodexLauncher.App/CodexLauncher.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist/CodexLauncher-v1.0.3-win-x64-self-contained --no-restore
+dotnet publish CodexLauncher.App/CodexLauncher.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist/CodexLauncher-v1.0.4-win-x64-self-contained --no-restore
 & "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" installer\CodexLauncher.iss
-dotnet publish CodexLauncher.App/CodexLauncher.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist/CodexLauncher-v1.0.3-win-x64-portable
-Set-Content -LiteralPath 'dist/CodexLauncher-v1.0.3-win-x64-portable/CodexLauncher.portable' -Value 'portable' -NoNewline -Encoding utf8
-Compress-Archive -Path 'dist/CodexLauncher-v1.0.3-win-x64-portable/*' -DestinationPath 'dist/CodexLauncher-v1.0.3-win-x64-portable.zip' -CompressionLevel Optimal
-$setup = 'dist/CodexLauncher-v1.0.3-win-x64-setup.exe'
-$hash = (Get-FileHash $setup -Algorithm SHA256).Hash
-"$hash  $(Split-Path $setup -Leaf)" | Set-Content "$setup.sha256" -Encoding ascii
-Get-FileHash $setup -Algorithm SHA256
+dotnet publish CodexLauncher.App/CodexLauncher.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist/CodexLauncher-v1.0.4-win-x64-portable
+Set-Content -LiteralPath 'dist/CodexLauncher-v1.0.4-win-x64-portable/CodexLauncher.portable' -Value 'portable' -NoNewline -Encoding utf8
+Compress-Archive -Path 'dist/CodexLauncher-v1.0.4-win-x64-portable/*' -DestinationPath 'dist/CodexLauncher-v1.0.4-win-x64-portable.zip' -CompressionLevel Optimal
+$setup = 'dist/CodexLauncher-v1.0.4-win-x64-setup.exe'
+$portable = 'dist/CodexLauncher-v1.0.4-win-x64-portable.zip'
+foreach ($package in @($setup, $portable)) {
+    $hash = (Get-FileHash $package -Algorithm SHA256).Hash
+    "$hash  $(Split-Path $package -Leaf)" | Set-Content "$package.sha256" -Encoding ascii
+}
+Get-FileHash $setup, $portable -Algorithm SHA256
 ```
 
-正式发布版和 SHA-256 校验值请前往 [GitHub Releases](https://github.com/jun501389541/CodexLauncher/releases/latest) 下载。普通用户可下载 Windows x64 安装器 `CodexLauncher-v1.0.3-win-x64-setup.exe`；它内含 .NET 运行时，按当前用户安装，不需要管理员权限，也不需要另外安装 .NET。安装器默认安装到 `%LOCALAPPDATA%\Programs\CodexLauncher`。若 Windows 显示 SmartScreen 提示，这是因为安装程序尚未进行代码签名。
+正式发布版和 SHA-256 校验值请前往 [GitHub Releases](https://github.com/jun501389541/CodexLauncher/releases/latest) 下载。普通用户可下载 Windows x64 安装器 `CodexLauncher-v1.0.4-win-x64-setup.exe`；它内含 .NET 运行时，按当前用户安装，不需要管理员权限，也不需要另外安装 .NET。安装器默认安装到 `%LOCALAPPDATA%\Programs\CodexLauncher`。若 Windows 显示 SmartScreen 提示，这是因为安装程序尚未进行代码签名。v1.0.4 同时修复了 EXE、桌面快捷方式和任务栏快捷方式的应用图标。
 
-免安装版继续使用 `CodexLauncher-v1.0.3-win-x64-portable.zip`，解压到可写目录后运行即可。安装版和便携版均将设置、日志、桥接数据、代理恢复状态与固定入口数据保存在程序目录的 `portable-data`。安装版首次启动时会从 `%LOCALAPPDATA%\CodexLauncher` 导入受支持的旧设置和桥接文件，且不会覆盖已有文件；升级会保留安装目录数据。卸载会永久删除安装目录及其中数据、旧的 `%LOCALAPPDATA%\CodexLauncher` 数据、快捷方式和启动器自己的开机启动项。测试程序不使用第三方测试包；在已安装 Codex 的本机可加 `-- --integration` 检查 MSIX、配套 CLI 定位、额度读取与诊断库只读读取。
+免安装版继续使用 `CodexLauncher-v1.0.4-win-x64-portable.zip`，解压到可写目录后运行即可。安装版和便携版均将设置、日志、桥接数据、代理恢复状态与固定入口数据保存在程序目录的 `portable-data`。安装版首次启动时会从 `%LOCALAPPDATA%\CodexLauncher` 导入受支持的旧设置和桥接文件，且不会覆盖已有文件；升级会保留安装目录数据。卸载会永久删除安装目录及其中数据、旧的 `%LOCALAPPDATA%\CodexLauncher` 数据、快捷方式和启动器自己的开机启动项。测试程序不使用第三方测试包；在已安装 Codex 的本机可加 `-- --integration` 检查 MSIX、配套 CLI 定位、额度读取与诊断库只读读取。
 
 便携包中的 `CodexLauncher.portable` 标记启用同目录数据模式。安装包通过 `CodexLauncher.installed` 标记启用同目录数据模式。首次启动时会导入现有 AppData 设置和桥接文件；目标目录需要支持写入，建议便携版解压到用户可写的位置。
 

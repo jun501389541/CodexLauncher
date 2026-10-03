@@ -1,7 +1,7 @@
 #define AppName "Codex 启动器"
-#define AppVersion "1.0.3"
+#define AppVersion "1.0.4"
 #define AppExeName "CodexLauncher.exe"
-#define PublishDir "..\dist\CodexLauncher-v1.0.3-win-x64-self-contained"
+#define PublishDir "..\dist\CodexLauncher-v1.0.4-win-x64-self-contained"
 
 [Setup]
 AppId={{72be3a1c-2cd5-44a9-86a8-6c9b71636b14}
@@ -15,7 +15,7 @@ PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=..\dist
-OutputBaseFilename=CodexLauncher-v1.0.3-win-x64-setup
+OutputBaseFilename=CodexLauncher-v1.0.4-win-x64-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -24,7 +24,7 @@ RestartApplications=no
 Uninstallable=yes
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\CodexLauncher.exe
-VersionInfoVersion=1.0.3.0
+VersionInfoVersion=1.0.4.0
 VersionInfoDescription=CodexLauncher Windows installer
 VersionInfoProductName={#AppName}
 VersionInfoProductVersion={#AppVersion}
@@ -40,8 +40,8 @@ Source: "{#PublishDir}\*"; DestDir: "{app}"; Excludes: "*.pdb"; Flags: ignorever
 Source: "CodexLauncher.installed"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\{#AppExeName}"
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\{#AppExeName}"; Tasks: desktopicon
 
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "CodexLauncher"; Flags: dontcreatekey uninsdeletevalue
