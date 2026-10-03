@@ -1,6 +1,6 @@
 # CodexLauncher Windows Installer Design
 
-**Status:** Approved for implementation  
+**Status:** Approved for implementation
 **Date:** 2026-10-03
 
 ## Goal

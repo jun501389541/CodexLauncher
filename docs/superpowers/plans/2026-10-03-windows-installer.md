@@ -6,7 +6,7 @@
 
 **Architecture:** Add an installer-specific marker interpreted by `LauncherDataPaths` so installed and portable builds both use app-local data without conflating their modes. Use Inno Setup to install the self-contained `win-x64` publish output, register shortcuts/uninstall metadata, and remove the install data, the app-specific legacy AppData folder, and the app-owned Run value on uninstall. Build and verify the installer before replacing only the duplicate self-contained asset in the existing v1.0.3 Release.
 
-**Tech Stack:** .NET 10 WinForms, C# tests in `CodexLauncher.Tests`, Inno Setup 6, PowerShell packaging/checksum commands, GitHub Release UI in authenticated Chrome.
+**Tech Stack:** .NET 10 WinForms, C# tests in `CodexLauncher.Tests`, Inno Setup 6.7.3, PowerShell packaging/checksum commands, GitHub Release UI in authenticated Chrome.
 
 **Spec:** `docs/superpowers/specs/2026-10-03-windows-installer-design.md`
 
@@ -51,13 +51,15 @@
 - [x] Add migration tests for missing source, partial bridge files, destination collisions, and retry after a copy failure; verify the migration marker is written only after a successful migration.
 - [x] Add a failure-path test where the install-local data path is blocked by a file; verify initialization fails and legacy source data remains intact.
 - [x] Run `dotnet run --project CodexLauncher.Tests/CodexLauncher.Tests.csproj -c Release` and confirm the focused tests and existing suite pass (139/139).
-- [x] Commit the data-mode change (`pending` until task commit).
+- [x] Commit the data-mode change (`e78c1bf`).
 
 ### Task 2: Add and compile the Inno Setup installer
 
 **Files:**
 - Create: `installer/CodexLauncher.iss`
 - Create: `installer/CodexLauncher.installed`
+- Create: `installer/languages/ChineseSimplified.isl` from the Inno Setup official repository, retaining its translator attribution.
+- Modify: `CodexLauncher.App/packages.lock.json` and `CodexLauncher.Core/packages.lock.json` only for verified win-x64 lock metadata; do not change resolved package versions.
 - Modify: `.gitignore` only if a generated installer output needs an ignore rule
 - Build output: `dist/CodexLauncher-v1.0.3-win-x64-setup.exe`
 
@@ -65,11 +67,11 @@
 - Consume the self-contained publish directory `dist/CodexLauncher-v1.0.3-win-x64-self-contained` and the installer marker constant/file `CodexLauncher.installed`.
 - Produce one x64 setup executable; install into `{localappdata}\Programs\CodexLauncher` with lowest privileges.
 
-- [ ] Check the official Inno Setup site for the current Inno Setup 6 installer and license; install its compiler if missing.
-- [ ] Write the `.iss` script with stable `AppId`, product version 1.0.3, per-user install mode, required self-contained files and notices, Start Menu shortcut, optional desktop shortcut, and installed marker.
-- [ ] Add uninstall-only cleanup for `{app}\portable-data`, `%LOCALAPPDATA%\CodexLauncher`, shortcuts/uninstaller registrations, and only the CodexLauncher Run value; do not invoke cleanup during upgrade.
-- [ ] Compile the installer and confirm compiler exit code 0 and the expected setup EXE exists.
-- [ ] Inspect the script for accidental elevation, prerequisite download, unrelated AppData paths, and uninstall cleanup that could run during installation/upgrade.
+- [x] Check the official Inno Setup site for Inno Setup 6.7.3 and its license; install its compiler because it was missing.
+- [x] Write the `.iss` script with stable `AppId`, product version 1.0.3, per-user install mode, required self-contained files and notices, Start Menu shortcut, optional desktop shortcut, and installed marker.
+- [x] Add uninstall-only cleanup for `{app}\portable-data`, `%LOCALAPPDATA%\CodexLauncher`, shortcut/uninstaller registrations, and only the CodexLauncher Run value; same-version install verification confirms cleanup does not run during upgrade.
+- [x] Re-evaluate `win-x64` lock metadata and confirm resolved package versions remain unchanged; publish the self-contained app and compile the installer with exit code 0.
+- [x] Inspect the script for accidental elevation, prerequisite download, unrelated AppData paths, and uninstall cleanup that could run during installation/upgrade.
 - [ ] Commit the installer source; keep generated EXE as a release artifact rather than a source-controlled file.
 
 ### Task 3: Verify install, migration, upgrade, and uninstall
