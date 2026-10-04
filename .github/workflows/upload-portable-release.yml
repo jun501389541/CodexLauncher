@@ -1,0 +1,128 @@
+name: Upload portable release ZIP
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing GitHub draft release tag
+        required: true
+        default: v1.0.4
+        type: string
+      release_id:
+        description: Existing GitHub draft release ID
+        required: true
+        default: '402740660'
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    runs-on: windows-latest
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build portable ZIP and checksum
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v(\d+\.\d+\.\d+)$') {
+            throw "Invalid release tag: $env:RELEASE_TAG"
+          }
+          $version = $Matches[1]
+          $publishDir = "dist/CodexLauncher-v$version-win-x64-portable"
+          $zipPath = "dist/CodexLauncher-v$version-win-x64-portable.zip"
+
+          dotnet restore CodexLauncher.App/CodexLauncher.App.csproj `
+            --runtime win-x64 --locked-mode
+          if ($LASTEXITCODE -ne 0) { throw 'dotnet restore failed' }
+
+          dotnet publish CodexLauncher.App/CodexLauncher.App.csproj `
+            -c Release -r win-x64 --self-contained true `
+            -p:PublishSingleFile=true -o $publishDir --no-restore
+          if ($LASTEXITCODE -ne 0) { throw 'dotnet publish failed' }
+
+          Set-Content -LiteralPath "$publishDir/CodexLauncher.portable" `
+            -Value 'portable' -NoNewline -Encoding utf8
+          Compress-Archive -Path "$publishDir/*" `
+            -DestinationPath $zipPath -CompressionLevel Optimal
+
+          $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash
+          "$hash  $(Split-Path $zipPath -Leaf)" |
+            Set-Content -LiteralPath "$zipPath.sha256" -Encoding ascii
+
+      - name: Upload assets to the existing GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          $headers = @{
+            Authorization = "Bearer $env:GH_TOKEN"
+            Accept = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          if ($env:RELEASE_ID -notmatch '^\d+$') { throw 'Invalid release ID' }
+          $release = Invoke-RestMethod -Headers $headers `
+            -Uri "https://api.github.com/repos/jun501389541/CodexLauncher/releases/$env:RELEASE_ID"
+          if ($release.tag_name -ne $env:RELEASE_TAG -or -not $release.draft) {
+            throw "Release $env:RELEASE_ID is not the expected draft for $env:RELEASE_TAG"
+          }
+
+          $version = $env:RELEASE_TAG.Substring(1)
+          foreach ($path in @(
+            "dist/CodexLauncher-v$version-win-x64-portable.zip",
+            "dist/CodexLauncher-v$version-win-x64-portable.zip.sha256"
+          )) {
+            $name = [System.IO.Path]::GetFileName($path)
+            $expectedDigest = 'sha256:' + (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            $uri = "https://uploads.github.com/repos/jun501389541/CodexLauncher/releases/$env:RELEASE_ID/assets?name=$([uri]::EscapeDataString($name))"
+            $handler = [System.Net.Http.HttpClientHandler]::new()
+            $client = [System.Net.Http.HttpClient]::new($handler)
+            $client.Timeout = [TimeSpan]::FromMinutes(10)
+            $client.DefaultRequestHeaders.Authorization = `
+              [System.Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', $env:GH_TOKEN)
+            $client.DefaultRequestHeaders.Accept.ParseAdd('application/vnd.github+json')
+            $stream = [System.IO.File]::OpenRead($path)
+            $content = [System.Net.Http.StreamContent]::new($stream)
+            $content.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse('application/octet-stream')
+            $request = [System.Net.Http.HttpRequestMessage]::new(
+              [System.Net.Http.HttpMethod]::Post, $uri
+            )
+            $request.Content = $content
+            $response = $null
+            try {
+              $response = $client.SendAsync(
+                $request, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead
+              ).GetAwaiter().GetResult()
+              $body = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+              if (-not $response.IsSuccessStatusCode) {
+                throw "Upload failed for $name with HTTP $([int]$response.StatusCode): $body"
+              }
+              $asset = $body | ConvertFrom-Json
+              if ($asset.state -ne 'uploaded' -or $asset.size -ne (Get-Item -LiteralPath $path).Length) {
+                throw "GitHub did not confirm the complete upload for $name"
+              }
+              if ($asset.digest -ne $expectedDigest) {
+                throw "GitHub SHA-256 does not match the local file for $name"
+              }
+              Write-Host "Uploaded $($asset.name): $($asset.size) bytes, $($asset.digest)"
+            }
+            finally {
+              if ($response) { $response.Dispose() }
+              $request.Dispose()
+              $client.Dispose()
+              $handler.Dispose()
+            }
+          }
