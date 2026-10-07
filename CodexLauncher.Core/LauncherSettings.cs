@@ -21,14 +21,41 @@ public sealed record LauncherSettings(
     int? BridgePort = null);
 
 public sealed record SettingsSaveResult(bool Succeeded, string? ErrorType = null);
+public enum SettingsLoadStatus { Loaded, Missing, Corrupt, Unavailable }
+public sealed record SettingsLoadResult(SettingsLoadStatus Status, LauncherSettings Settings, string? ErrorType = null, Exception? Error = null)
+{
+    public bool Succeeded => Status is SettingsLoadStatus.Loaded or SettingsLoadStatus.Missing or SettingsLoadStatus.Corrupt;
+}
 
 public sealed class LauncherSettingsStore(string path)
 {
     public LauncherSettings Load()
     {
-        if (!File.Exists(path)) return new LauncherSettings();
-        try { return JsonSerializer.Deserialize<LauncherSettings>(File.ReadAllText(path)) ?? new LauncherSettings(); }
-        catch (JsonException) { return new LauncherSettings(); }
+        var result = TryLoad();
+        if (!result.Succeeded && result.Error is not null) throw result.Error;
+        return result.Settings;
+    }
+
+    public SettingsLoadResult TryLoad()
+    {
+        string contents;
+        try { contents = File.ReadAllText(path); }
+        catch (FileNotFoundException) { return new(SettingsLoadStatus.Missing, new LauncherSettings()); }
+        catch (DirectoryNotFoundException) { return new(SettingsLoadStatus.Missing, new LauncherSettings()); }
+        catch (IOException exception) { return new(SettingsLoadStatus.Unavailable, new LauncherSettings(), exception.GetType().Name, exception); }
+        catch (UnauthorizedAccessException exception) { return new(SettingsLoadStatus.Unavailable, new LauncherSettings(), exception.GetType().Name, exception); }
+
+        try
+        {
+            var settings = JsonSerializer.Deserialize<LauncherSettings>(contents);
+            return settings is null
+                ? new(SettingsLoadStatus.Corrupt, new LauncherSettings(), nameof(JsonException))
+                : new(SettingsLoadStatus.Loaded, settings);
+        }
+        catch (JsonException exception)
+        {
+            return new(SettingsLoadStatus.Corrupt, new LauncherSettings(), exception.GetType().Name, exception);
+        }
     }
 
     public void Save(LauncherSettings settings)

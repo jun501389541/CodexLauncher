@@ -172,6 +172,7 @@ public sealed class MainForm : Form
     private readonly LauncherSettingsStore _settings;
     private LauncherSettings? _lastSavedSettings;
     private readonly AppLauncher _launcher;
+    private readonly LaunchRouteTracker _launchRouteTracker = new();
     private readonly DiagnosticLogger _logger;
     private readonly HttpClient _gatewayHttp = new(new SocketsHttpHandler { UseProxy = false });
     private readonly UpstreamPortDiscovery _portDiscovery = UpstreamPortDiscovery.ForCurrentUser();
@@ -186,10 +187,12 @@ public sealed class MainForm : Form
     private string _mihomoPath = @"D:\Software\Mihomo Party\Clash Party\resources\sidecar\mihomo.exe";
     private CodexInstallation? _installation;
     private DiagnosisResult? _diagnosis;
-    private TunModeState _currentTun = new(false, false);
+    private TunModeState _currentTun = new(null, null);
     private GatewayUpstream? _activeGateway;
     private AccessHealthSnapshot? _health;
     private bool _refreshingPorts;
+    private bool _tunReadUnavailable;
+    private bool _tunUnavailableLogged;
     private bool _suppressProxyChange;
     private bool _codexRunning;
     private bool _settingsWritable = true;
@@ -727,10 +730,17 @@ public sealed class MainForm : Form
         if(value&&_background&&!_allowVisible){if(!IsHandleCreated)CreateHandle();value=false;}
         base.SetVisibleCore(value);
     }
-    private Task InitializeCoreAsync()=>_coreInitialization??=InitializeCoreOnceAsync();
+    private Task InitializeCoreAsync()
+    {
+        if (_coreInitialization is { IsFaulted: false, IsCanceled: false } current) return current;
+        return _coreInitialization = InitializeCoreOnceAsync();
+    }
     private async Task InitializeCoreOnceAsync()
     {
-        ApplyPreferences(_settings.Load());StartQuotaProvider();
+        var load = _settings.TryLoad();
+        if (!load.Succeeded) throw new IOException("启动器设置暂时不可读；原文件已保留，请重试。", load.Error);
+        if (load.Status == SettingsLoadStatus.Corrupt) _logger.Write("settings-load", "corrupt-defaults", null);
+        ApplyPreferences(load.Settings);StartQuotaProvider();
         _bridgePanel.SetConfiguration(_bridgeEnabled,_bridgePort??43189,null);
         if(_bridgeEnabled)
         {
@@ -1035,8 +1045,9 @@ public sealed class MainForm : Form
     /// <summary>线路指纹变化时立即重新采样，并把新的事实交给监测服务。</summary>
     private void SyncMonitorContext()
     {
-        var proxy = SafeReadProxy();
-        var route = _diagnosis?.Selected;
+        var launchEvidence = _launchRouteTracker.For(_desktop?.Instance);
+        var proxy = launchEvidence?.Route == RouteKind.Proxy ? launchEvidence.Proxy : SafeReadProxy();
+        var route = launchEvidence?.Route ?? _diagnosis?.Selected;
         var fingerprint = RouteFingerprint(route, proxy);
         var changed = fingerprint != _monitorContext.Fingerprint;
         _monitorContext = new RuntimeMonitorContext
@@ -1046,8 +1057,10 @@ public sealed class MainForm : Form
             Route = route,
             Proxy = proxy,
             Fingerprint = fingerprint,
-            RouteLabel = RouteLabel(route, proxy),
-            RouteConfirmed = route is not null,
+            RouteLabel = launchEvidence is null
+                ? RouteLabel(route, proxy)
+                : "启动时选择 · " + RouteLabel(route, proxy),
+            RouteConfirmed = launchEvidence is not null,
             Events = _diagnosticEvents,
             DiagnosticSourceAvailable = _diagnosticAvailable
         };
@@ -1093,15 +1106,18 @@ public sealed class MainForm : Form
         try
         {
             var portsChanged = await RefreshUpstreamPortsAsync();
-            var latestTun = _tunDiscovery.Read();
-            var tunChanged = latestTun != _currentTun;
+            var tunChanged = RefreshTunState();
             if (tunChanged)
             {
-                _currentTun = latestTun;
-                SetRow("TUN 状态", DescribeTun(latestTun), null);
+                SetRow("TUN 状态", DescribeTunStatus(), null);
             }
             if ((portsChanged || tunChanged) && _installation is not null)
                 await GuardedAsync(CheckAsync);
+        }
+        catch (Exception ex)
+        {
+            _logger.Write("port-monitor", ex.GetType().Name, null);
+            SetRow("后台监测", "暂时无法刷新状态；下次轮询会重试", null);
         }
         finally { _refreshingPorts = false; }
     }
@@ -1156,8 +1172,8 @@ public sealed class MainForm : Form
     private async Task CheckAsync()
     {
         await RefreshUpstreamPortsAsync();
-        _currentTun = _tunDiscovery.Read();
-        SetRow("TUN 状态", DescribeTun(_currentTun), null);
+        RefreshTunState();
+        SetRow("TUN 状态", DescribeTunStatus(), null);
         ProxyAddress? proxy;
         try { proxy = ReadProxy(); }
         catch (ArgumentException ex)
@@ -1299,8 +1315,13 @@ public sealed class MainForm : Form
     private async Task LaunchAsync()
     {
         await RefreshUpstreamPortsAsync();
-        _currentTun = _tunDiscovery.Read();
-        SetRow("TUN 状态", DescribeTun(_currentTun), null);
+        RefreshTunState();
+        SetRow("TUN 状态", DescribeTunStatus(), null);
+        if (_tunReadUnavailable || !_currentTun.IsKnown)
+        {
+            SetRow("Codex 启动", "未启动：代理软件的 TUN 状态暂时不可读，请重试检测", null);
+            return;
+        }
         if (_currentTun.HasConflict)
         {
             SetRow("Codex 启动", "未启动：检测到双 TUN 冲突", null);
@@ -1316,7 +1337,8 @@ public sealed class MainForm : Form
         if (_diagnosis is null) await CheckAsync();
         var route = _diagnosis?.Selected ?? RouteKind.Direct;
         var usedFallback = _diagnosis?.Selected is null;
-        var result = await _launcher.LaunchAsync(_installation, route, ReadProxy(), _closing.Token);
+        var launchProxy = ReadProxy();
+        var result = await _launcher.LaunchAsync(_installation, route, launchProxy, _closing.Token);
         var text = result switch
         {
             LaunchStatus.Launched when usedFallback => "桌面版已启动，使用系统默认网络尝试连接。若仍显示重连，请先配置本地代理后重新启动。",
@@ -1330,6 +1352,9 @@ public sealed class MainForm : Form
         if (result is LaunchStatus.Launched or LaunchStatus.AlreadyRunning)
         {
             RefreshDesktop();
+            if (result == LaunchStatus.Launched && _desktop?.Instance is { } launchedInstance)
+                _launchRouteTracker.Record(launchedInstance, route, route == RouteKind.Proxy ? launchProxy : null);
+            SyncMonitorContext();
             SetProcessRow();
             UpdateActionAvailability();
         }
@@ -1383,7 +1408,7 @@ public sealed class MainForm : Form
     {
         var enabled = !_operationGate.IsBusy;
         _checkButton.Enabled = enabled;
-        _launchButton.Enabled = enabled && _installation is not null && !_currentTun.HasConflict && !_codexRunning;
+        _launchButton.Enabled = enabled && _installation is not null && !_tunReadUnavailable && _currentTun.IsKnown && !_currentTun.HasConflict && !_codexRunning;
         _gatewayStartButton.Enabled = enabled;
         _partyButton.Enabled = enabled;
         _vergeButton.Enabled = enabled;
@@ -1414,6 +1439,7 @@ public sealed class MainForm : Form
     {
         if (!enabled) return BusyReason();
         if (_installation is null) return "未找到 OpenAI.Codex 安装包，无法启动。";
+        if (_tunReadUnavailable || !_currentTun.IsKnown) return "Party 或 Verge 的 TUN 状态暂时不可读，请重试检测。";
         if (_currentTun.HasConflict) return "Party 和 Verge 的 TUN 同时开启，先关闭其中一个再启动。";
         if (_codexRunning) return "Codex 已在运行；如需切换线路请先正常退出。";
         return "启动 Codex 桌面版。";
@@ -1425,6 +1451,7 @@ public sealed class MainForm : Form
         {
             _desktop = null;
             _codexRunning = false;
+            _launchRouteTracker.Clear();
             return;
         }
 
@@ -1554,8 +1581,47 @@ public sealed class MainForm : Form
     private bool IsGatewayEntry(ProxyAddress? proxy) => proxy?.Uri.Port == _gatewayPorts.Entry;
 
     private static string DescribeTun(TunModeState state) =>
-        $"Party {(state.PartyEnabled ? "开启" : "关闭")} / Verge {(state.VergeEnabled ? "开启" : "关闭")}" +
+        $"Party {DescribeTunValue(state.PartyEnabled)} / Verge {DescribeTunValue(state.VergeEnabled)}" +
         (state.HasConflict ? "（冲突）" : "");
+
+    private bool RefreshTunState() => MergeTunState(_tunDiscovery.Read());
+
+    private bool MergeTunState(TunModeState observed)
+    {
+        var previous = _currentTun;
+        var wasUnavailable = _tunReadUnavailable;
+        _currentTun = _currentTun.MergeKnown(observed);
+        _tunReadUnavailable = !observed.IsKnown;
+
+        if (_tunReadUnavailable && !_tunUnavailableLogged)
+        {
+            _logger.Write("tun-config", "temporarily-unavailable", null);
+            _tunUnavailableLogged = true;
+        }
+        else if (!_tunReadUnavailable && _tunUnavailableLogged)
+        {
+            _logger.Write("tun-config", "recovered", null);
+            _tunUnavailableLogged = false;
+        }
+
+        return previous != _currentTun || wasUnavailable != _tunReadUnavailable;
+    }
+
+    private string DescribeTunStatus()
+    {
+        var description = DescribeTun(_currentTun);
+        if (!_tunReadUnavailable) return description;
+        return _currentTun.IsKnown
+            ? description + "（配置暂时不可读，显示上次有效状态）"
+            : description + "（配置暂时不可读）";
+    }
+
+    private static string DescribeTunValue(bool? enabled) => enabled switch
+    {
+        true => "开启",
+        false => "关闭",
+        _ => "未知"
+    };
 
     private static ProxyAddress? DetectLocalProxy()
     {

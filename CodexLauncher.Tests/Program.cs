@@ -21,6 +21,10 @@ var tests = new List<(string Name, Action Run)>
     ("reads and switches the fixed gateway upstream", () => TestGatewayControllerAsync().GetAwaiter().GetResult()),
     ("discovers changed Party and Verge mixed ports", TestUpstreamPortDiscovery),
     ("detects simultaneous Party and Verge TUN modes", TestTunModeDiscovery),
+    ("keeps a locked TUN configuration unknown", TestTunReadFailureUnknown),
+    ("labels the retained TUN state while configuration is unavailable", TestTunUnavailableStatus),
+    ("binds launch route evidence to the verified process identity", TestLaunchRouteTracker),
+    ("does not confirm a recommendation as the active instance route", TestRouteConfirmationInMainForm),
     ("reloads owned gateway ports while preserving selection", () => TestGatewayPortSyncAsync().GetAwaiter().GetResult()),
     ("reports incompatible controller responses", () => TestInvalidGatewayResponseAsync().GetAwaiter().GetResult()),
     ("treats a timed out but unbound controller port as stopped", () => TestAbsentGatewayTimeoutAsync().GetAwaiter().GetResult()),
@@ -74,6 +78,8 @@ var tests = new List<(string Name, Action Run)>
     ,("leaves default route process environment untouched", TestDefaultEnvironment)
     ,("locates MSIX app from package metadata and manifest", TestAppMetadata)
     ,("saves and reloads configured proxy", TestSettings)
+    ,("reports locked settings without changing the original file", TestSettingsReadFailure)
+    ,("retries core initialization after settings become readable", TestCoreInitializationRetry)
     ,("reports settings write failures without throwing", TestSettingsWriteFailure)
     ,("launch injects only temporarily and restores on failure", TestLaunchRestore)
     ,("successful launch also restores proxy variables", TestLaunchSuccessRestore)
@@ -236,6 +242,156 @@ static void TestTunModeDiscovery()
         Equal(false, state.HasConflict);
     }
     finally { Directory.Delete(dir, true); }
+}
+
+static void TestTunReadFailureUnknown()
+{
+    var dir = Path.Combine(Path.GetTempPath(), "codex-tun-locked-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+    try
+    {
+        var party = Path.Combine(dir, "mihomo.yaml");
+        var verge = Path.Combine(dir, "verge.yaml");
+        File.WriteAllText(party, "tun:\n  enable: true\n");
+        File.WriteAllText(verge, "enable_tun_mode: false\n");
+        using var locked = new FileStream(party, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        var state = new TunModeDiscovery(party, verge).Read();
+        Equal(null, state.GetType().GetProperty("PartyEnabled")!.GetValue(state));
+        Equal(false, state.GetType().GetProperty("VergeEnabled")!.GetValue(state));
+        Equal(false, state.IsKnown);
+        var merged = new TunModeState(true, false).MergeKnown(state);
+        Equal(true, merged.PartyEnabled);
+        Equal(false, merged.VergeEnabled);
+    }
+    finally { Directory.Delete(dir, true); }
+}
+
+static void TestTunUnavailableStatus()
+{
+    Exception? error = null;
+    var thread = new Thread(() =>
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"codex-tun-status-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var services = new LauncherServices(dir,
+                (_, token) => new SharedQuotaCoordinator(null, monitoringEnabled: false, lifetimeToken: token),
+                _ => throw new Exception("bridge should remain disabled"), new MemoryAutoStartRegistry());
+            using var form = new MainForm(null, true, services);
+            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            var merge = typeof(MainForm).GetMethod("MergeTunState", flags)!;
+            var describe = typeof(MainForm).GetMethod("DescribeTunStatus", flags)!;
+            merge.Invoke(form, [new TunModeState(true, false)]);
+            merge.Invoke(form, [new TunModeState(null, false)]);
+
+            var current = (TunModeState)typeof(MainForm).GetField("_currentTun", flags)!.GetValue(form)!;
+            Equal(true, current.PartyEnabled);
+            Equal(false, current.VergeEnabled);
+            var stale = (string)describe.Invoke(form, null)!;
+            Equal(true, stale.Contains("Party 开启 / Verge 关闭", StringComparison.Ordinal));
+            Equal(true, stale.Contains("暂时不可读", StringComparison.Ordinal));
+
+            typeof(MainForm).GetField("_installation", flags)!.SetValue(form,
+                new CodexInstallation("synthetic", @"C:\Codex", "synthetic!App"));
+            var updateAvailability = typeof(MainForm).GetMethod("UpdateActionAvailability", flags)!;
+            updateAvailability.Invoke(form, null);
+            var launchButton = typeof(MainForm).GetField("_launchButton", flags)!.GetValue(form)!;
+            Equal(false, (bool)launchButton.GetType().GetProperty("Enabled")!.GetValue(launchButton)!);
+            var disabledReason = typeof(MainForm).GetMethod("LaunchDisabledReason", flags)!.Invoke(form, [true]) as string;
+            Equal(true, disabledReason!.Contains("暂时不可读", StringComparison.Ordinal));
+
+            merge.Invoke(form, [new TunModeState(false, false)]);
+            var recovered = (string)describe.Invoke(form, null)!;
+            Equal(false, recovered.Contains("暂时不可读", StringComparison.Ordinal));
+            updateAvailability.Invoke(form, null);
+            Equal(true, (bool)launchButton.GetType().GetProperty("Enabled")!.GetValue(launchButton)!);
+        }
+        catch (Exception ex) { error = ex; }
+        finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
+    });
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start();
+    thread.Join();
+    if (error is not null) throw error;
+}
+
+static void TestLaunchRouteTracker()
+{
+    var tracker = new LaunchRouteTracker();
+    var started = new CodexInstance
+    {
+        ProcessId = 1234,
+        StartedAt = DateTimeOffset.Parse("2026-10-07T01:02:03Z"),
+        ExecutablePath = @"C:\Program Files\WindowsApps\OpenAI.Codex\ChatGPT.exe"
+    };
+    Equal(null, tracker.For(started)); // An externally started process has no launcher evidence.
+
+    var proxy = ProxyAddress.Parse("127.0.0.1:7890");
+    tracker.Record(started, RouteKind.Proxy, proxy);
+    Equal(RouteKind.Proxy, tracker.For(started)!.Route);
+    Equal(proxy, tracker.For(started)!.Proxy);
+
+    var reusedPid = started with { StartedAt = started.StartedAt.AddSeconds(1) };
+    Equal(null, tracker.For(reusedPid));
+    Equal(null, tracker.For(started)); // PID reuse invalidates the old evidence.
+}
+
+static void TestRouteConfirmationInMainForm()
+{
+    Exception? error = null;
+    var thread = new Thread(() =>
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"codex-route-evidence-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var services = new LauncherServices(dir,
+                (_, token) => new SharedQuotaCoordinator(null, monitoringEnabled: false, lifetimeToken: token),
+                _ => throw new Exception("bridge should remain disabled"), new MemoryAutoStartRegistry());
+            using var form = new MainForm(null, true, services);
+            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            var tracker = (LaunchRouteTracker)typeof(MainForm).GetField("_launchRouteTracker", flags)!.GetValue(form)!;
+            var instance = new CodexInstance
+            {
+                ProcessId = 2345,
+                StartedAt = DateTimeOffset.Parse("2026-10-07T01:02:03Z"),
+                ExecutablePath = @"C:\Program Files\WindowsApps\OpenAI.Codex\ChatGPT.exe"
+            };
+            var discovery = new CodexDesktopDiscovery(CodexDesktopState.Running, instance, "synthetic", true);
+            var reachable = new ProbeResult(ProbeStatus.Reachable, 200, TimeSpan.FromMilliseconds(100), "HTTP 200");
+            void SetDiagnosis(RouteKind selected) => typeof(MainForm).GetField("_diagnosis", flags)!.SetValue(form,
+                new DiagnosisResult(reachable, reachable, selected));
+            typeof(MainForm).GetField("_desktop", flags)!.SetValue(form, discovery);
+            SetDiagnosis(RouteKind.Direct);
+            var sync = typeof(MainForm).GetMethod("SyncMonitorContext", flags)!;
+            var contextField = typeof(MainForm).GetField("_monitorContext", flags)!;
+            sync.Invoke(form, null);
+            var context = (RuntimeMonitorContext)contextField.GetValue(form)!;
+            Equal(false, context.RouteConfirmed);
+            Equal(RouteKind.Direct, context.Route);
+
+            tracker.Record(instance, RouteKind.Proxy, ProxyAddress.Parse("127.0.0.1:7890"));
+            sync.Invoke(form, null);
+            context = (RuntimeMonitorContext)contextField.GetValue(form)!;
+            Equal(true, context.RouteConfirmed);
+            Equal(RouteKind.Proxy, context.Route);
+
+            var reused = instance with { StartedAt = instance.StartedAt.AddSeconds(1) };
+            typeof(MainForm).GetField("_desktop", flags)!.SetValue(form,
+                new CodexDesktopDiscovery(CodexDesktopState.Running, reused, "synthetic reused PID", true));
+            sync.Invoke(form, null);
+            context = (RuntimeMonitorContext)contextField.GetValue(form)!;
+            Equal(false, context.RouteConfirmed);
+            Equal(RouteKind.Direct, context.Route);
+        }
+        catch (Exception ex) { error = ex; }
+        finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
+    });
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start();
+    thread.Join();
+    if (error is not null) throw error;
 }
 
 static async Task TestGatewayPortSyncAsync()
@@ -1206,6 +1362,68 @@ static void TestSettings()
         Equal(8020, store.Load().VergePort);
     }
     finally { if (File.Exists(path)) File.Delete(path); }
+}
+
+static void TestSettingsReadFailure()
+{
+    var dir = Path.Combine(Path.GetTempPath(), $"codex-settings-read-locked-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(dir);
+    try
+    {
+        var path = Path.Combine(dir, "settings.json");
+        const string original = "{\"ProxyUrl\":\"http://127.0.0.1:7890\"}";
+        File.WriteAllText(path, original);
+        using (var locked = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            var method = typeof(LauncherSettingsStore).GetMethod("TryLoad");
+            if (method is null) throw new Exception("LauncherSettingsStore.TryLoad is missing");
+            var result = method.Invoke(new LauncherSettingsStore(path), null)!;
+            Equal(false, (bool)result.GetType().GetProperty("Succeeded")!.GetValue(result)!);
+            Equal("IOException", result.GetType().GetProperty("ErrorType")!.GetValue(result));
+        }
+        Equal(original, File.ReadAllText(path));
+    }
+    finally { Directory.Delete(dir, true); }
+}
+
+static void TestCoreInitializationRetry()
+{
+    Exception? error = null;
+    var thread = new Thread(() =>
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"codex-init-retry-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = Path.Combine(dir, "settings.json");
+            File.WriteAllText(path, "{}");
+            var registry = new MemoryAutoStartRegistry();
+            var quotaCreated = 0;
+            var services = new LauncherServices(dir, (_, token) =>
+            {
+                quotaCreated++;
+                return new SharedQuotaCoordinator(null, monitoringEnabled: false, lifetimeToken: token);
+            }, _ => throw new Exception("bridge should remain disabled"), registry);
+            using var form = new MainForm(null, true, services);
+            var initialize = typeof(MainForm).GetMethod("InitializeCoreAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            using (var locked = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                var first = (Task)initialize.Invoke(form, null)!;
+                try { first.GetAwaiter().GetResult(); }
+                catch (Exception) { }
+            }
+            var retry = (Task)initialize.Invoke(form, null)!;
+            retry.GetAwaiter().GetResult();
+            Equal(true, retry.IsCompletedSuccessfully);
+            Equal(1, quotaCreated);
+        }
+        catch (Exception ex) { error = ex; }
+        finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
+    });
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start();
+    thread.Join();
+    if (error is not null) throw error;
 }
 
 static void TestSettingsWriteFailure()
