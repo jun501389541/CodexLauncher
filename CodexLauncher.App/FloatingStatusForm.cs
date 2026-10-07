@@ -5,7 +5,7 @@ namespace CodexLauncher.App;
 
 /// <summary>
 /// 共享快照悬浮窗：只渲染主窗推送的状态，自己不采集网络、不启动定时探测。
-/// 置顶、不抢焦点、可拖动；位置由调用方保存并按可见工作区约束。
+/// 按设置选择桌面层级或始终置顶；始终不抢焦点、可拖动，位置由调用方保存并按可见工作区约束。
 ///
 /// 整卡自绘后由 <see cref="LayeredSurface"/> 提交给合成器，因此圆角与投影是真正的抗锯齿半透明像素。
 /// 尺寸由 <see cref="FloatingCard"/> 按字体度量 × <see cref="Control.DeviceDpi"/> 算出——
@@ -41,12 +41,12 @@ internal sealed class FloatingStatusForm : Form
     private Point _dragOrigin;
     private bool _moved;
 
-    internal FloatingStatusForm()
+    internal FloatingStatusForm(FloatingWindowMode displayMode = FloatingWindowMode.Desktop)
     {
         Text = "Codex 运行状态";
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
-        TopMost = true;
+        SetDisplayMode(displayMode);
         StartPosition = FormStartPosition.Manual;
         AutoScaleMode = AutoScaleMode.Dpi;
         BackColor = UiTheme.Card;
@@ -84,6 +84,12 @@ internal sealed class FloatingStatusForm : Form
 
     /// <summary>用户拖动后保存新位置。</summary>
     internal event Action<int, int>? PositionChanged;
+
+    /// <summary>切换桌面显示与始终置顶；悬浮窗保持非激活窗口。</summary>
+    internal void SetDisplayMode(FloatingWindowMode displayMode)
+    {
+        TopMost = displayMode == FloatingWindowMode.AlwaysOnTop;
+    }
 
     private string _toolTipText = "正在检测";
     private RuntimeHealthSnapshot? _lastSnapshot;

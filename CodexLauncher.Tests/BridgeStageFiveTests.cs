@@ -1,5 +1,6 @@
 using CodexLauncher.App;
 using CodexLauncher.Core;
+using System.Net.NetworkInformation;
 
 internal static class BridgeStageFiveTests
 {
@@ -8,11 +9,28 @@ internal static class BridgeStageFiveTests
         ("background autostart recognizes the executable rather than the full command", Startup),
         ("background activation signals do not request the main window", Activation)
         ,("bridge runtime preserves local selection and supports revocation while stopped", ()=>Runtime().GetAwaiter().GetResult())
+        ,("bridge adapter choices retain candidates and explain failed listener checks", AdapterChoices)
         ,("bridge panel exposes themed main-window controls and clears invitation state", Panel)
         ,("bridge panel starts collapsed and toggles layout without changing sharing", CollapsiblePanel)
         ,("background main window stays hidden and explicitly exits its owned bridge", BackgroundWindow)
     ];
     private static void Check(bool value,string message){if(!value)throw new Exception(message);}
+    private static void AdapterChoices()
+    {
+        var catalog=BridgeAdapterCatalog.Build(
+            [new("wifi","Wi-Fi",NetworkInterfaceType.Wireless80211),new("ethernet","Ethernet",NetworkInterfaceType.Ethernet),new("vpn","VPN",NetworkInterfaceType.Tunnel)],
+            id=>id=="wifi"?"NETWORK_POLICY_ACCESS_DENIED":null);
+        Check(catalog.Count==2,"supported Wi-Fi and Ethernet candidates were not retained");
+        Check(catalog.Single(a=>a.Id=="wifi").UnavailableReason!.Contains("权限"),"failed Wi-Fi policy check did not reach the adapter list");
+        Check(catalog.Single(a=>a.Id=="ethernet").CanListen,"eligible Ethernet candidate was rejected");
+        var privateProfile=BridgeAdapterChoice.FromError("wifi","Wi-Fi","PRIVATE_NETWORK_REQUIRED");
+        Check(!privateProfile.CanListen&&privateProfile.UnavailableReason!.Contains("专用"),"public network profile was not explained");
+        Check(privateProfile.ToString().Contains("Wi-Fi")&&privateProfile.ToString().Contains("专用"),"ineligible adapter disappeared from the selector label");
+        var denied=BridgeAdapterChoice.FromError("wifi","Wi-Fi","NETWORK_POLICY_ACCESS_DENIED");
+        Check(!denied.CanListen&&denied.UnavailableReason!.Contains("权限"),"network policy access failure was hidden");
+        var available=BridgeAdapterChoice.FromError("wifi","Wi-Fi",null);
+        Check(available.CanListen&&available.UnavailableReason is null,"eligible adapter was marked unavailable");
+    }
     private sealed class Registry:IAutoStartRegistry
     {internal string? Value;public string? Read(string name)=>Value;public void Write(string name,string? value)=>Value=value;}
     private static void Startup()

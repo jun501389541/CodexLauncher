@@ -4,7 +4,7 @@ namespace CodexLauncher.Core;
 
 /// <summary>
 /// 启动器配置。旧字段保留原语义；新增字段在缺失时使用计划默认值
-/// （主题跟随系统、悬浮窗关闭、额度查询开启、悬浮窗位置未记录、不开机自启）。
+/// （主题跟随系统、悬浮窗关闭且默认桌面显示、额度查询开启、悬浮窗位置未记录、不开机自启）。
 /// </summary>
 public sealed record LauncherSettings(
     string? ProxyUrl = null,
@@ -18,7 +18,18 @@ public sealed record LauncherSettings(
     bool QuotaMonitoringEnabled = true,
     bool AutoStartEnabled = false,
     bool BridgeEnabled = false,
-    int? BridgePort = null);
+    int? BridgePort = null,
+    FloatingWindowMode FloatingMode = FloatingWindowMode.Desktop);
+
+/// <summary>悬浮窗相对于普通应用窗口的显示层级。</summary>
+public enum FloatingWindowMode
+{
+    /// <summary>普通窗口层级；应用窗口可以覆盖悬浮窗。</summary>
+    Desktop,
+
+    /// <summary>始终显示在普通应用窗口上方。</summary>
+    AlwaysOnTop
+}
 
 public sealed record SettingsSaveResult(bool Succeeded, string? ErrorType = null);
 public enum SettingsLoadStatus { Loaded, Missing, Corrupt, Unavailable }

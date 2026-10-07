@@ -15,8 +15,8 @@ internal sealed class PrivateLanListenerPolicy : IBridgeListenerPolicy
         var nic = NetworkInterface.GetAllNetworkInterfaces().SingleOrDefault(n => n.OperationalStatus == OperationalStatus.Up &&
             n.NetworkInterfaceType is NetworkInterfaceType.Ethernet or NetworkInterfaceType.Wireless80211 &&
             n.GetIPProperties().UnicastAddresses.Any(a => a.Address.Equals(address)));
-        if (nic is null || !IsPhysical(nic.Id) || !IsPrivate(nic.Id))
-            throw new InvalidOperationException("PRIVATE_PHYSICAL_ADAPTER_REQUIRED");
+        if(nic is null||!IsPhysical(nic.Id))throw new InvalidOperationException("PHYSICAL_ADAPTER_REQUIRED");
+        if(!IsPrivate(nic.Id))throw new InvalidOperationException("PRIVATE_NETWORK_REQUIRED");
     }
     private static bool IsPhysical(string id)
     {

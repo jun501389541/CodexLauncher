@@ -8,6 +8,7 @@ internal sealed record BridgeNetworkBinding(string AdapterId, IPAddress Address,
 {
     internal Uri Endpoint => new($"https://{Address}:{Port}");
 }
+internal sealed record BridgeNetworkCheck(BridgeNetworkBinding? Binding,string? ErrorCode);
 internal interface IBridgeNetworkSource : IDisposable
 {
     event Action<bool>? Changed;
@@ -27,22 +28,38 @@ internal sealed class WindowsBridgeNetworkSource : IBridgeNetworkSource
         SystemEvents.PowerModeChanged += PowerChanged;
     }
     public BridgeNetworkBinding? Resolve(string adapterId, int port, IPAddress? preferred)
+        =>Inspect(adapterId,port,preferred).Binding;
+
+    internal BridgeNetworkCheck Inspect(string adapterId,int port,IPAddress? preferred)
     {
-        if (_suspended || port is < 1 or > 65535) return null;
+        if(_suspended)return new(null,"NETWORK_SUSPENDED");
+        if(port is < 1 or > 65535)return new(null,"INVALID_PORT");
         try
         {
-            var nic = NetworkInterface.GetAllNetworkInterfaces().SingleOrDefault(n => n.Id == adapterId &&
-                n.OperationalStatus == OperationalStatus.Up && n.NetworkInterfaceType is NetworkInterfaceType.Ethernet or NetworkInterfaceType.Wireless80211);
-            if (nic is null) return null;
+            var nic=NetworkInterface.GetAllNetworkInterfaces().SingleOrDefault(n=>n.Id==adapterId);
+            if(nic is null)return new(null,"NETWORK_ADAPTER_NOT_FOUND");
+            if(nic.NetworkInterfaceType is not (NetworkInterfaceType.Ethernet or NetworkInterfaceType.Wireless80211))
+                return new(null,"UNSUPPORTED_NETWORK_ADAPTER");
+            if(nic.OperationalStatus!=OperationalStatus.Up)return new(null,"NETWORK_ADAPTER_NOT_CONNECTED");
             var properties = nic.GetIPProperties();
             var addresses = properties.UnicastAddresses.Select(a=>a.Address).Where(IsPrivateV4).OrderBy(a=>Convert.ToHexString(a.GetAddressBytes())).ToArray();
             var address = addresses.FirstOrDefault(a=>a.Equals(preferred)) ?? addresses.FirstOrDefault();
-            if (address is null) return null;
-            _policy.Validate(address,port);
-            return new(nic.Id,address,properties.GetIPv4Properties().Index,port);
+            if(address is null)return new(null,"PRIVATE_IPV4_REQUIRED");
+            try{_policy.Validate(address,port);}
+            catch(Exception e){return new(null,PolicyErrorCode(e));}
+            return new(new(nic.Id,address,properties.GetIPv4Properties().Index,port),null);
         }
-        catch { return null; } // inability to establish physical/private state never selects a fallback NIC
+        catch(Exception e){return new(null,PolicyErrorCode(e));}
     }
+    private static string PolicyErrorCode(Exception error)=>error switch
+    {
+        InvalidOperationException {Message:"PRIVATE_IPV4_REQUIRED"}=>"PRIVATE_IPV4_REQUIRED",
+        InvalidOperationException {Message:"PHYSICAL_ADAPTER_REQUIRED"}=>"PHYSICAL_ADAPTER_REQUIRED",
+        InvalidOperationException {Message:"PRIVATE_NETWORK_REQUIRED"}=>"PRIVATE_NETWORK_REQUIRED",
+        UnauthorizedAccessException=>"NETWORK_POLICY_ACCESS_DENIED",
+        System.Runtime.InteropServices.COMException {HResult:unchecked((int)0x80070005)}=>"NETWORK_POLICY_ACCESS_DENIED",
+        _=>"NETWORK_POLICY_CHECK_FAILED"
+    };
     internal static bool IsPrivateV4(IPAddress address)
     {
         if (address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork) return false;

@@ -221,6 +221,23 @@ public sealed class MainForm : Form
     // 因此托盘里改了主题，高级设置里的选择器也会跟着亮。
     private readonly TrayMenu _tray;
     private readonly ThemeSelector _themeSelector = new();
+    private readonly CheckBox _floatingEnabledCheck = new()
+    {
+        Text = "启用悬浮窗",
+        AutoSize = true,
+        BackColor = UiTheme.Card,
+        ForeColor = UiTheme.Text,
+        Margin = new Padding(0, 10, 16, 0)
+    };
+    private readonly ComboBox _floatingModeChoice = new()
+    {
+        Name = "FloatingMode",
+        DropDownStyle = ComboBoxStyle.DropDownList,
+        Width = 138,
+        BackColor = UiTheme.Card,
+        ForeColor = UiTheme.Text,
+        Margin = new Padding(0, 6, 16, 0)
+    };
     private readonly CheckBox _autoStartCheck = new()
     {
         Text = "开机自动启动",
@@ -251,7 +268,9 @@ public sealed class MainForm : Form
     private bool _exitRequested;
     private bool _trayHintShown;
     private bool _syncingAutoStart;
+    private bool _syncingFloatingControls;
     private bool _floatingEnabled;
+    private FloatingWindowMode _floatingMode = FloatingWindowMode.Desktop;
     private int? _floatingLeft;
     private int? _floatingTop;
     private bool _quotaEnabled = true;
@@ -389,6 +408,7 @@ public sealed class MainForm : Form
         _toolTip.SetToolTip(_partyButton, "把固定入口切换到 Party 当前自动发现的 mixed 端口，切换后会立即重新检测。");
         _toolTip.SetToolTip(_vergeButton, "把固定入口切换到 Verge 当前自动发现的 mixed 端口，切换后会立即重新检测。");
         _toolTip.SetToolTip(_proxyInput, "这里填写本机 HTTP 或 mixed 代理入口，例如 127.0.0.1:7890。");
+        _toolTip.SetToolTip(_floatingModeChoice, "桌面显示时，普通应用窗口会遮住悬浮窗；始终置顶时，悬浮窗保持在其他窗口上方。");
     }
 
     private void DrawResultsHeader(object? sender, DrawListViewColumnHeaderEventArgs e)
@@ -459,30 +479,44 @@ public sealed class MainForm : Form
         var header = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            Height = 88,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 2,
+            RowCount = 1,
             Margin = new Padding(0, 0, 0, 12),
             BackColor = UiTheme.Window
         };
         header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72));
         header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        var titles = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = UiTheme.Window };
-        titles.RowStyles.Add(new RowStyle(SizeType.Percent, 58));
-        titles.RowStyles.Add(new RowStyle(SizeType.Percent, 42));
+        header.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        var titles = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 1,
+            RowCount = 2,
+            BackColor = UiTheme.Window
+        };
+        titles.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        titles.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        titles.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         titles.Controls.Add(new Label
         {
             Text = "Codex 启动器",
-            Dock = DockStyle.Fill,
+            AutoSize = true,
             Font = new Font(Font.FontFamily, 19F, FontStyle.Bold),
             ForeColor = UiTheme.Text,
-            TextAlign = ContentAlignment.BottomLeft
+            TextAlign = ContentAlignment.MiddleLeft,
+            Margin = Padding.Empty
         }, 0, 0);
         titles.Controls.Add(new Label
         {
             Text = "第三方网络启动助手 · 自动识别 Party / Verge 端口",
-            Dock = DockStyle.Fill,
+            AutoSize = true,
             ForeColor = UiTheme.Muted,
-            TextAlign = ContentAlignment.TopLeft
+            TextAlign = ContentAlignment.MiddleLeft,
+            Margin = new Padding(0, 2, 0, 0)
         }, 0, 1);
         header.Controls.Add(_logo, 0, 0);
         header.Controls.Add(titles, 1, 0);
@@ -533,6 +567,9 @@ public sealed class MainForm : Form
         layout.Controls.Add(_advancedToggle);
         _advancedPanel.Controls.AddRange([_gatewayStartButton, _gatewayStopButton, _chooseMihomoButton]);
         _advancedPanel.Controls.Add(_themeSelector);
+        _floatingModeChoice.Items.AddRange(["桌面显示", "始终置顶"]);
+        _advancedPanel.Controls.Add(_floatingEnabledCheck);
+        _advancedPanel.Controls.Add(_floatingModeChoice);
         _advancedPanel.Controls.Add(_autoStartCheck);
         layout.Controls.Add(_advancedPanel);
         card.Controls.Add(layout);
@@ -615,6 +652,18 @@ public sealed class MainForm : Form
         _tray.ThemeRequested += SetThemeMode;
         _tray.AutoStartRequested += ApplyAutoStart;
         _tray.FloatingRequested += () => SetFloatingWindow(!_floatingEnabled);
+        _floatingEnabledCheck.CheckedChanged += (_, _) =>
+        {
+            if (_syncingFloatingControls) return;
+            SetFloatingWindow(_floatingEnabledCheck.Checked);
+        };
+        _floatingModeChoice.SelectedIndexChanged += (_, _) =>
+        {
+            if (_syncingFloatingControls) return;
+            SetFloatingMode(_floatingModeChoice.SelectedIndex == 1
+                ? FloatingWindowMode.AlwaysOnTop
+                : FloatingWindowMode.Desktop);
+        };
         _autoStartCheck.CheckedChanged += (_, _) =>
         {
             // 程序化回显不能触发写注册表，否则读状态会变成写状态。
@@ -832,14 +881,16 @@ public sealed class MainForm : Form
         _bridgePort = settings.BridgePort;
         _theme.SetMode(settings.Theme);
         _floatingEnabled = settings.FloatingWindowEnabled;
+        _floatingMode = NormalizeFloatingMode(settings.FloatingMode);
         _floatingLeft = settings.FloatingLeft;
         _floatingTop = settings.FloatingTop;
         _quotaEnabled = settings.QuotaMonitoringEnabled;
         ThemeManager.ApplyTo(this, _theme.Palette, _theme.UseSystemColors);
         ApplyWindowChrome();
         SyncThemeMenu();
-        _tray.SyncFloating(_floatingEnabled);
-        if (_floatingEnabled&&(!_background||_allowVisible)) ShowFloatingWindow();
+        SyncFloatingControls();
+        if (_floatingEnabled) ShowFloatingWindow();
+        else HideFloatingWindow();
 
         // 自启状态以注册表为准，不看配置里的 AutoStartEnabled：
         // 用户可能从任务管理器禁用启动项，配置里那个值只是"上次的意图"。
@@ -862,7 +913,8 @@ public sealed class MainForm : Form
         _quotaEnabled,
         _autoStart.IsEnabled(Application.ExecutablePath),
         _bridgeEnabled,
-        _bridgePort);
+        _bridgePort,
+        _floatingMode);
         // 后台尚未初始化代理控件与网关参数时，仅保存已加载的偏好。
         // 托盘操作和后台启动信号都不能用控件默认值覆盖已有连接设置。
         if (!_desktopSettingsLoaded)
@@ -1732,41 +1784,59 @@ public sealed class MainForm : Form
     private void SetFloatingWindow(bool enabled)
     {
         _floatingEnabled = enabled;
-        _tray.SyncFloating(enabled);
+        SyncFloatingControls();
         if (enabled) ShowFloatingWindow();
         else HideFloatingWindow();
         SavePreferences(SafeReadProxy()?.ToString());
     }
 
+    private void SetFloatingMode(FloatingWindowMode mode)
+    {
+        _floatingMode = NormalizeFloatingMode(mode);
+        SyncFloatingControls();
+        _floating?.SetDisplayMode(_floatingMode);
+        SavePreferences(SafeReadProxy()?.ToString());
+    }
+
+    private void SyncFloatingControls()
+    {
+        _syncingFloatingControls = true;
+        try
+        {
+            _floatingEnabledCheck.Checked = _floatingEnabled;
+            _floatingModeChoice.SelectedIndex = _floatingMode == FloatingWindowMode.AlwaysOnTop ? 1 : 0;
+            _tray.SyncFloating(_floatingEnabled);
+        }
+        finally
+        {
+            _syncingFloatingControls = false;
+        }
+    }
+
+    private static FloatingWindowMode NormalizeFloatingMode(FloatingWindowMode mode) =>
+        mode == FloatingWindowMode.AlwaysOnTop ? FloatingWindowMode.AlwaysOnTop : FloatingWindowMode.Desktop;
+
     private void ShowFloatingWindow()
     {
-        _floating ??= BuildFloatingWindow();
+        if (_floating is null)
+        {
+            _floating = new FloatingStatusForm(_floatingMode);
+            _floating.OpenRequested += RestoreFromTray;
+            _floating.HideRequested += () => SetFloatingWindow(false);
+            _floating.ExitRequested += RequestExit;
+            _floating.PositionChanged += (x, y) =>
+            {
+                _floatingLeft = x;
+                _floatingTop = y;
+                SavePreferences(SafeReadProxy()?.ToString());
+            };
+        }
+        _floating.SetDisplayMode(_floatingMode);
         _floating.PlaceAt(_floatingLeft ?? DefaultFloatingLeft(), _floatingTop ?? DefaultFloatingTop());
         _floating.Show();
     }
 
     private void HideFloatingWindow() => _floating?.Hide();
-
-    private FloatingStatusForm BuildFloatingWindow()
-    {
-        var window = new FloatingStatusForm();
-        window.OpenRequested += RestoreFromTray;
-        window.HideRequested += () =>
-        {
-            _floatingEnabled = false;
-            _tray.SyncFloating(false);
-            HideFloatingWindow();
-            SavePreferences(SafeReadProxy()?.ToString());
-        };
-        window.ExitRequested += RequestExit;
-        window.PositionChanged += (x, y) =>
-        {
-            _floatingLeft = x;
-            _floatingTop = y;
-            SavePreferences(SafeReadProxy()?.ToString());
-        };
-        return window;
-    }
 
     private static int DefaultFloatingLeft()
     {

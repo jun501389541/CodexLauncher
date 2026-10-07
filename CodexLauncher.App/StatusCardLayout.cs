@@ -38,11 +38,27 @@ internal static class StatusCardLayout
         dotHost.Controls.Add(dot);
         dotHost.Resize += (_, _) => dot.Location = new Point((dotHost.Width - dot.Width) / 2, (dotHost.Height - dot.Height) / 2);
 
+        var wordsHost = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = false,
+            ColumnCount = 1,
+            RowCount = 3,
+            Margin = Padding.Empty,
+            Padding = Padding.Empty,
+            BackColor = Color.White
+        };
+        wordsHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        wordsHost.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+        wordsHost.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        wordsHost.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+
         var words = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.TopDown,
             WrapContents = false,
+            Margin = Padding.Empty,
             BackColor = Color.White
         };
         words.Controls.Add(title);
@@ -75,7 +91,8 @@ internal static class StatusCardLayout
         area.Controls.Add(meta, 0, 1);
 
         layout.Controls.Add(dotHost, 0, 0);
-        layout.Controls.Add(words, 1, 0);
+        wordsHost.Controls.Add(words, 0, 1);
+        layout.Controls.Add(wordsHost, 1, 0);
         layout.Controls.Add(area, 2, 0);
 
         card.Controls.Add(layout);

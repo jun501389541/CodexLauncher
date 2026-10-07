@@ -5,8 +5,38 @@ using System.Net.NetworkInformation;
 
 namespace CodexLauncher.App;
 
-internal sealed record BridgeAdapterChoice(string Id,string Name)
-{public override string ToString()=>Name;}
+internal sealed record BridgeAdapterChoice(string Id,string Name,bool CanListen,string? UnavailableReason)
+{
+    internal static BridgeAdapterChoice FromError(string id,string name,string? errorCode)
+    {
+        var reason=errorCode switch
+        {
+            null=>null,
+            "NETWORK_ADAPTER_NOT_FOUND"=>"网卡不存在或已断开。",
+            "NETWORK_ADAPTER_NOT_CONNECTED"=>"网卡未连接，请连接 Wi-Fi 或网线。",
+            "UNSUPPORTED_NETWORK_ADAPTER"=>"只支持 Wi-Fi 或以太网网卡。",
+            "PRIVATE_IPV4_REQUIRED"=>"没有局域网 IPv4 地址，请连接与手机同一网络的 Wi-Fi 或以太网。",
+            "PHYSICAL_ADAPTER_REQUIRED"=>"这是虚拟网卡，请选择实际的 Wi-Fi 或以太网网卡。",
+            "PRIVATE_NETWORK_REQUIRED"=>"Windows 将此网络设为“公用”；请将可信网络改为“专用”后刷新。",
+            "NETWORK_POLICY_ACCESS_DENIED"=>"Windows 拒绝读取网卡权限信息（访问被拒绝）。",
+            "NETWORK_POLICY_CHECK_FAILED"=>"无法读取 Windows 网卡安全信息，请稍后重试。",
+            "NETWORK_SUSPENDED"=>"网络当前处于挂起状态。",
+            "INVALID_PORT"=>"端口号无效。",
+            _=>$"网卡检查失败：{errorCode}。"
+        };
+        return new(id,name,reason is null,reason);
+    }
+
+    public override string ToString()=>CanListen?Name:$"{Name} — {UnavailableReason}";
+}
+internal sealed record BridgeAdapterDescriptor(string Id,string Name,NetworkInterfaceType Type);
+internal static class BridgeAdapterCatalog
+{
+    internal static IReadOnlyList<BridgeAdapterChoice> Build(IEnumerable<BridgeAdapterDescriptor> adapters,Func<string,string?> inspect)
+        =>adapters.Where(a=>a.Type is NetworkInterfaceType.Ethernet or NetworkInterfaceType.Wireless80211)
+            .Select(a=>BridgeAdapterChoice.FromError(a.Id,a.Name,inspect(a.Id)))
+            .OrderBy(a=>a.Name).ToArray();
+}
 
 /// <summary>Owns bridge resources only; the caller owns the shared quota coordinator.</summary>
 internal sealed class BridgeRuntime:IAsyncDisposable
@@ -48,8 +78,8 @@ internal sealed class BridgeRuntime:IAsyncDisposable
     internal static IReadOnlyList<BridgeAdapterChoice> AvailableAdapters()
     {
         using var source=new WindowsBridgeNetworkSource();
-        return NetworkInterface.GetAllNetworkInterfaces().Where(n=>source.Resolve(n.Id,43189,null) is not null)
-            .Select(n=>new BridgeAdapterChoice(n.Id,n.Name)).OrderBy(n=>n.Name).ToArray();
+        var adapters=NetworkInterface.GetAllNetworkInterfaces().Select(n=>new BridgeAdapterDescriptor(n.Id,n.Name,n.NetworkInterfaceType));
+        return BridgeAdapterCatalog.Build(adapters,id=>source.Inspect(id,43189,null).ErrorCode);
     }
     internal Task StartAsync(int port)=>string.IsNullOrWhiteSpace(SelectedAdapter)?Task.CompletedTask:_lan.StartAsync(SelectedAdapter,port);
     internal Task StopAsync()=>_lan.StopAsync();
