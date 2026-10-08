@@ -4,7 +4,7 @@
 
 Review covers the desktop Core, Bridge service/store, WinForms layout and lifecycle,
 and the Android wire contract. Only CodexLauncher changes are committed. Android
-workspace changes remain local; no tag or GitHub Release is created.
+workspace changes remain local.
 
 ## Review fixes
 
@@ -49,6 +49,12 @@ not a proof that every possible defect has been eliminated.
   passed. Output contains the executable, SQLite native library, third-party
   notices and licenses. Build artifacts are ignored and are not committed.
 - `git diff --check`: passed.
+- GitHub Release `v1.0.5` is published from commit
+  `cd8cc59bc39725e68ca16c9aaa8f224355907421`:
+  https://github.com/jun501389541/CodexLauncher/releases/tag/v1.0.5
+- The published portable ZIP is 61,614,608 bytes and GitHub reports SHA-256
+  `a67c46aae1368a0f3bd8049ad5585faaa56b9ade7bb1a212c1730232738b923c`, matching
+  the local package. Its `.sha256` sidecar was also uploaded and verified.
 
 An isolated packaged startup smoke was guarded against an existing launcher
 instance and therefore **was not started**. Sending a background activation to
@@ -62,7 +68,7 @@ is verified; packaged startup and shutdown require a later manual acceptance run
 - Android's existing Launcher parser rejects raw `usedPercent` outside 0–100,
   although the desktop contract intentionally retains raw values and clamps only
   the remaining percentage. Fix and verify the Android parser before coordinated
-  release; do not silently change the desktop contract.
+  coordinated Bridge release; do not silently change the desktop contract.
 - Correct stale-cache labeling and preservation of the data timestamp rely on
   the local Android fixes described in the interop report. Old APKs can still label
   a cached upstream failure as fresh. Those Android fixes are outside this push.
