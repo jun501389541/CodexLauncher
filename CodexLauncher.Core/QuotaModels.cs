@@ -86,19 +86,24 @@ public sealed record QuotaWindow(
         ? "剩余未知"
         : string.Create(CultureInfo.InvariantCulture, $"剩余 {RemainingPercent}%");
 
-    /// <summary>
-    /// 条状图左侧的重置倒计时，措辞与 Codex 一致（“4 小时 38 分钟后重置”）。
-    /// 到点后仍显示“等待确认重置”，不自行填成 100%。
-    /// </summary>
+    /// <summary>条状图的紧凑重置倒计时；到点后等待服务端确认，不自行填成 100%。</summary>
     public string ResetCountdownLabel(DateTimeOffset now)
     {
         if (ResetsAt is null) return "重置时间未知";
         var left = ResetsAt.Value - now;
         if (left <= TimeSpan.Zero) return "等待确认重置";
-        if (left.TotalDays >= 1) return $"{(int)left.TotalDays} 天 {left.Hours} 小时后重置";
-        if (left.TotalHours >= 1) return $"{(int)left.TotalHours} 小时 {left.Minutes} 分钟后重置";
-        if (left.TotalMinutes >= 1) return $"{left.Minutes} 分钟后重置";
-        return $"{Math.Max(1, (int)left.TotalSeconds)} 秒后重置";
+        if (left.TotalDays >= 1) return $"{(int)left.TotalDays}天{left.Hours}小时后重置";
+        if (left.TotalHours >= 1) return $"{(int)left.TotalHours}小时{left.Minutes}分钟后重置";
+        if (left.TotalMinutes >= 1) return $"{left.Minutes}分钟后重置";
+        return $"{Math.Max(1, (int)left.TotalSeconds)}秒后重置";
+    }
+
+    /// <summary>倒计时后附设备当前本地时区的重置日期时间，不显示时区后缀。</summary>
+    public string ResetDetailLabel(DateTimeOffset now, TimeZoneInfo? displayTimeZone = null)
+    {
+        if (ResetsAt is null) return ResetCountdownLabel(now);
+        var localReset = TimeZoneInfo.ConvertTime(ResetsAt.Value, displayTimeZone ?? TimeZoneInfo.Local);
+        return string.Create(CultureInfo.InvariantCulture, $"{ResetCountdownLabel(now)} · {localReset:MM-dd HH:mm}");
     }
 }
 

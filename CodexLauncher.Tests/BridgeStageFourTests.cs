@@ -181,9 +181,16 @@ internal static class BridgeStageFourTests
         Check(profile.Resources.OfType<ARecord>().Single().Address.Equals(b.Address), "discovery leaked another address");
         var txt = profile.Resources.OfType<TXTRecord>().Single().Strings;
         Check(txt.Count == 3 && txt.Contains("schemaVersion=1") && txt.Any(s=>s.StartsWith("bridgeId=")), "metadata privacy allowlist changed");
-        var command = BridgeConnectionGuidance.FirewallCommands(@"D:\Program Files\Codex\CodexLauncher.exe",43189);
-        Check(command.Contains("profile=private") && command.Contains("remoteip=localsubnet") && command.Contains("localport=43189") && !command.Contains("runas"), "firewall guidance exceeded scope");
-        try { BridgeConnectionGuidance.FirewallCommands("evil\"&whoami",43189); throw new Exception("unsafe command accepted"); } catch (ArgumentException) { }
+        var command = BridgeConnectionGuidance.FirewallCommands(@"D:\Program Files\Codex\CodexLauncher.exe",43189,b.Address);
+        Check(command.Contains("profile=public,private") && command.Contains("localip=192.168.1.10") && command.Contains("remoteip=localsubnet") && command.Contains("localport=43189") && !command.Contains("runas"), "firewall guidance must cover public and private profiles without widening the address scope");
+        try { BridgeConnectionGuidance.FirewallCommands("evil\"&whoami",43189,b.Address); throw new Exception("unsafe command accepted"); } catch (ArgumentException) { }
+        foreach(var invalid in new[]{IPAddress.Any,IPAddress.Loopback,IPAddress.IPv6Loopback,IPAddress.Parse("8.8.8.8")})
+        {
+            try { BridgeConnectionGuidance.FirewallCommands(@"D:\CodexLauncher.exe",43189,invalid); throw new Exception("unscoped firewall address accepted"); } catch (ArgumentException) { }
+        }
+        var mdns=BridgeConnectionGuidance.FirewallCommands(@"D:\CodexLauncher.exe",43189,b.Address,true).Split(Environment.NewLine);
+        Check(mdns.Length==2&&mdns.All(line=>line.Contains("localip=192.168.1.10")&&line.Contains("profile=public,private")&&line.Contains("remoteip=localsubnet")),"mDNS guidance widened the rule scope");
+        Check(BridgeConnectionGuidance.ManualConnection(new("PAUSED")).Contains("公用、专用网络均支持"),"connection help still required a private profile");
         using var blocked = new MakaretuBridgeDiscovery();
         try { blocked.Start(b,"12345678-1234-1234-1234-123456789abc"); throw new Exception("unverified multicast started"); }
         catch (InvalidOperationException e) { Check(e.Message == "MDNS_ISOLATION_UNVERIFIED", "isolation gate wrong"); }

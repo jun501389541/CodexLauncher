@@ -8,6 +8,11 @@ using System.Reflection;
 
 // 模拟 App Server：额度测试用它验证 stdio 握手、请求编号关联与只读白名单，
 // 不会访问真实账号，也不产生任何对话请求。
+if (args.Contains("--bridge-interop-server", StringComparer.OrdinalIgnoreCase))
+{
+    await BridgeInteropServer.RunAsync();
+    return 0;
+}
 if (args.Contains("--fake-app-server", StringComparer.OrdinalIgnoreCase))
 {
     RunFakeAppServer(args);
@@ -92,7 +97,9 @@ var tests = new List<(string Name, Action Run)>
     ,("re-styles every registered menu when the palette changes", TestThemeMenuRefresh)
     ,("lays out quota bars from the remaining percent", TestQuotaBarGeometry)
     ,("formats the reset countdown the way the quota bars show it", TestQuotaCountdownLabels)
+    ,("formats quota reset details in local time", TestQuotaResetDetailLabel)
     ,("renders a quota bar row that follows the theme", TestQuotaBarRow)
+    ,("keeps the quota account verification hint on one line", TestQuotaAccountSingleLine)
     ,("sizes the floating card from the measured text and dpi", TestFloatingCardLayout)
     ,("centers the floating card icon on the two text rows", TestFloatingIconInk)
     ,("keeps the floating card readable over any desktop backdrop", TestFloatingCardContrast)
@@ -1234,7 +1241,7 @@ static void TestRuntimeMetadataText()
 
     var lines = snapshot.MetaText.Split('\n');
     Equal(4, lines.Length);
-    Equal("路径：固定入口 · Verge", lines[0]);
+    Equal("路径：固定入口·Verge", lines[0]);
     Equal("证据：线路 + 诊断事件", lines[1]);
     Equal("耗时：301 ms", lines[2]);
     Equal("更新时间：14:57:50", lines[3]);
@@ -2143,8 +2150,8 @@ static void TestQuotaCountdownLabels()
     var window = new QuotaWindow("主要窗口", "5 小时", 300, 99, now.AddHours(4).AddMinutes(38));
     Equal("5 小时限额", window.TitleLabel);
     Equal("每周限额", new QuotaWindow("次要窗口", "每周", 10080, 98, now.AddDays(6).AddHours(18)).TitleLabel);
-    Equal("4 小时 38 分钟后重置", window.ResetCountdownLabel(now));
-    Equal("25 分钟后重置", new QuotaWindow("主要窗口", "5 小时", 300, 60, now.AddMinutes(25)).ResetCountdownLabel(now));
+    Equal("4小时38分钟后重置", window.ResetCountdownLabel(now));
+    Equal("25分钟后重置", new QuotaWindow("主要窗口", "5 小时", 300, 60, now.AddMinutes(25)).ResetCountdownLabel(now));
     Equal("剩余 99%", window.RemainingSummary);
 
     // 未知值不得伪造成 0% 或 100%。
@@ -2155,6 +2162,48 @@ static void TestQuotaCountdownLabels()
 
     // 到点后不自行填成 100%，沿用既有“等待确认重置”。
     Equal("等待确认重置", new QuotaWindow("主要窗口", "5 小时", 300, 40, now.AddSeconds(-1)).ResetCountdownLabel(now));
+}
+
+static void TestQuotaResetDetailLabel()
+{
+    var now = DateTimeOffset.Parse("2026-10-01T12:00:00+08:00");
+    var window = new QuotaWindow("主要窗口", "5 小时", 300, 99, now.AddHours(4).AddMinutes(38));
+    var china = TimeZoneInfo.CreateCustomTimeZone("Test China", TimeSpan.FromHours(8), "中国标准时间", "中国标准时间");
+    var west = TimeZoneInfo.CreateCustomTimeZone("Test West", TimeSpan.FromHours(-7), "西部时间", "西部时间");
+    Equal("4小时38分钟后重置 · 10-01 16:38", window.ResetDetailLabel(now, china));
+    Equal("4小时38分钟后重置 · 10-01 01:38", window.ResetDetailLabel(now, west));
+    var localReset = TimeZoneInfo.ConvertTime(window.ResetsAt!.Value, TimeZoneInfo.Local);
+    Equal($"4小时38分钟后重置 · {localReset:MM-dd HH:mm}", window.ResetDetailLabel(now));
+    Equal("重置时间未知", new QuotaWindow("主要窗口", "5 小时", 300, null, null).ResetDetailLabel(now));
+    Equal("等待确认重置 · 10-01 11:59",
+        new QuotaWindow("主要窗口", "5 小时", 300, 40, now.AddMinutes(-1)).ResetDetailLabel(now, china));
+}
+
+static void TestQuotaAccountSingleLine()
+{
+    Exception? failure = null;
+    var thread = new Thread(() =>
+    {
+        try
+        {
+            using var form = new MainForm(null, true);
+            var account = (Label)typeof(MainForm).GetField("_quotaAccount", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(form)!;
+            account.Text = "账号：jun501389541@gmail.com · Plus · 请核对桌面账号。";
+            form.PerformLayout();
+            account.PerformLayout();
+            var singleLineSize = TextRenderer.MeasureText(account.Text, account.Font, Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
+            if (account.MaximumSize.Width < singleLineSize.Width)
+                throw new Exception($"account label max width {account.MaximumSize.Width} is smaller than single-line text width {singleLineSize.Width}");
+            var preferredSize = account.GetPreferredSize(Size.Empty);
+            if (preferredSize.Height > singleLineSize.Height + 4)
+                throw new Exception($"account label preferred size {preferredSize.Width}x{preferredSize.Height} wraps text measured at {singleLineSize.Width}x{singleLineSize.Height}");
+        }
+        catch (Exception ex) { failure = ex; }
+    });
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start();
+    thread.Join();
+    if (failure is not null) throw failure;
 }
 
 // 额度条行必须整体跟随主题：这是深色菜单缺陷的同类契约（构造时烤死颜色），不能重犯。
@@ -2183,12 +2232,14 @@ static void RunQuotaBarRow()
         row.Render(window, "5 小时限额", now);
         Equal(ThemePalette.Light.Card, row.BackColor.ToArgb() & 0xFFFFFF);
         Equal("5 小时限额", row.TitleText);
-        Equal("4 小时 38 分钟后重置", row.CountdownText);
+        Equal("4小时38分钟后重置", row.CountdownText);
+        Equal(window.ResetDetailLabel(now), row.ResetDetailText);
         Equal("剩余 99%", row.RemainingText);
         Equal(99, row.Bar.RemainingPercent);
         Equal(true, row.TitleFont.Bold);
         Equal(true, row.Height > 0);
         Equal(true, row.Bar.Height > 0);
+        Equal(true, row.ResetDetailTop >= row.Bar.Bottom);
         AtLeast(4.5, Contrast(row.TitleColor.ToArgb(), row.BackColor.ToArgb()), "浅色主题额度条标题");
         AtLeast(3.0, Contrast(row.Bar.FillColor.ToArgb(), row.Bar.TrackColor.ToArgb()), "浅色主题额度条填充");
 
@@ -2207,6 +2258,7 @@ static void RunQuotaBarRow()
         Equal(0, QuotaBar.FillWidth(row.Bar.Width, row.Bar.RemainingPercent));
         Equal("剩余未知", row.RemainingText);
         Equal("重置时间未知", row.CountdownText);
+        Equal("重置时间未知", row.ResetDetailText);
     }
     finally
     {
@@ -2569,7 +2621,7 @@ static void RunStatusCardLayout()
         var badge = new Label { Text = "!  波动", AutoSize = true, Padding = new Padding(10, 5, 10, 5), Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold) };
         var meta = new Label
         {
-            Text = "路径：固定入口 · Verge\n证据：线路 + 诊断事件\n耗时：3012 ms\n更新时间：20:12:12",
+            Text = "路径：固定入口·Verge\n证据：线路 + 诊断事件\n耗时：3012 ms\n更新时间：20:12:12",
             AutoSize = true,
             MaximumSize = new Size(UiTheme.StatusMetaMaxWidth, 0),
             Margin = new Padding(0, 6, 0, 0)
@@ -2600,6 +2652,7 @@ static void RunStatusCardLayout()
 
         // 超长字符串由 MaximumSize 兜底，不能把正文列挤没。
         Equal(true, meta.Width <= UiTheme.StatusMetaMaxWidth);
+        Equal(true, TextRenderer.MeasureText(meta.Text.Split('\n')[0], meta.Font, Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPadding).Width <= UiTheme.StatusMetaMaxWidth);
 
         // 卡片高度必须装得下内容，不能靠写死 180 碰运气。
         var layout = (TableLayoutPanel)card.Controls[0];
@@ -2966,6 +3019,34 @@ static void RunScrollHost()
         // 内容放得下时滚轮无事可做，也不能拦截。
         content.Size = new Size(400, 100);
         Equal(false, host.TryHandleWheel(inside.X, inside.Y, -120));
+
+        // 原生 ComboBox 下拉列表是独立 popup；它覆盖在 ScrollHost 上时，滚轮应留给列表，
+        // 不能被全局消息过滤器按屏幕坐标误判为主页面滚动。
+        using (var dropdownForm = new Form { ClientSize = new Size(400, 300), ShowInTaskbar = false, Opacity = 0 })
+        using (var dropdownHost = new ScrollHost { Dock = DockStyle.Fill })
+        {
+            var dropdownContent = new Panel { Size = new Size(400, 900) };
+            using var selector = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(8, 8) };
+            selector.Items.AddRange(["Wi-Fi", "Ethernet"]);
+            dropdownContent.Controls.Add(selector);
+            dropdownHost.SetContent(dropdownContent);
+            dropdownForm.Controls.Add(dropdownHost);
+            dropdownForm.Show();
+            Application.DoEvents();
+            selector.Focus();
+            selector.DroppedDown = true;
+            Application.DoEvents();
+            Equal(true, selector.DroppedDown);
+            var popupPoint = dropdownHost.PointToScreen(new Point(10, 10));
+            var packedPoint = unchecked((popupPoint.X & 0xFFFF) | ((popupPoint.Y & 0xFFFF) << 16));
+            var wheelMessage = Message.Create(dropdownHost.Handle, ScrollHost.WmMouseWheel, new IntPtr(120 << 16), new IntPtr(packedPoint));
+            var beforePopupWheel = dropdownHost.Offset;
+            Equal(false, ((IMessageFilter)dropdownHost).PreFilterMessage(ref wheelMessage));
+            Equal(beforePopupWheel, dropdownHost.Offset);
+            selector.DroppedDown = false;
+            Application.DoEvents();
+            Equal(true, dropdownHost.TryHandleWheel(popupPoint.X, popupPoint.Y, -120));
+        }
 
         // 滚轮必须真的接到 ScrollHost 上：覆盖 OnMouseWheel 是入口之一，消息过滤是另一个，
         // 都不能被静默删掉（系统滚动条已经关掉了，少一条就少一条滚动路径）。

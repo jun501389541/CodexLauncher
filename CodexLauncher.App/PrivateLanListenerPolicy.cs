@@ -16,47 +16,75 @@ internal sealed class PrivateLanListenerPolicy : IBridgeListenerPolicy
             n.NetworkInterfaceType is NetworkInterfaceType.Ethernet or NetworkInterfaceType.Wireless80211 &&
             n.GetIPProperties().UnicastAddresses.Any(a => a.Address.Equals(address)));
         if(nic is null||!IsPhysical(nic.Id))throw new InvalidOperationException("PHYSICAL_ADAPTER_REQUIRED");
-        if(!IsPrivate(nic.Id))throw new InvalidOperationException("PRIVATE_NETWORK_REQUIRED");
+        int? category;
+        try { category=(int?)ReadCategory(nic.Id); }
+        catch(Exception error) { throw new InvalidOperationException("NETWORK_PROFILE_CHECK_FAILED",error); }
+        EnsureSupportedCategory(category);
     }
     private static bool IsPhysical(string id)
+        =>BridgeAdapterHardware.IsPhysical(id);
+    internal static void EnsureSupportedCategory(int? category)
     {
-        object? locator = null, services = null, rows = null;
-        try
-        {
-            locator = Activator.CreateInstance(Type.GetTypeFromProgID("WbemScripting.SWbemLocator", true)!);
-            services = ((dynamic)locator!).ConnectServer(".", "root\\cimv2");
-            // 不将配置值插进WQL；逐项比较 Windows 适配器 GUID。
-            rows = ((dynamic)services).ExecQuery("SELECT GUID, PhysicalAdapter FROM Win32_NetworkAdapter WHERE PhysicalAdapter = TRUE");
-            foreach (var row in (System.Collections.IEnumerable)rows)
-            {
-                try { if (Guid.TryParse((string?)((dynamic)row).GUID, out var guid) && Guid.TryParse(id, out var requested) && guid == requested) return true; }
-                finally { Marshal.FinalReleaseComObject(row); }
-            }
-            return false;
-        }
-        finally { Release(rows); Release(services); Release(locator); }
+        if(category is null)throw new InvalidOperationException("NETWORK_PROFILE_UNAVAILABLE");
+        if(category is not (0 or 1))throw new InvalidOperationException("NETWORK_PROFILE_UNSUPPORTED");
     }
-    private static bool IsPrivate(string id)
+    private static BridgeNetworkCategory? ReadCategory(string id)
     {
         object? manager = null, connections = null;
         try
         {
             manager = Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("DCB00C01-570F-4A9B-8D69-199FDBA5723B"), true)!);
             connections = ((dynamic)manager!).GetNetworkConnections();
+            var requested=Guid.Parse(id);
             foreach (var connection in (System.Collections.IEnumerable)connections)
             {
-                object? network = null;
+                IBridgeNetworkProfile? network = null;
                 try
                 {
-                    if ((Guid)((dynamic)connection).GetAdapterId() != Guid.Parse(id)) continue;
-                    network = ((dynamic)connection).GetNetwork();
-                    return (int)((dynamic)network).GetCategory() == 1;
+                    var adapter=(IBridgeNetworkConnection)connection;
+                    adapter.GetAdapterId(out var adapterId);
+                    if(adapterId!=requested)continue;
+                    network=adapter.GetNetwork();
+                    network.GetCategory(out var category);
+                    return category;
                 }
                 finally { Release(network); Release(connection); }
             }
-            return false;
+            return null;
         }
         finally { Release(connections); Release(manager); }
     }
     private static void Release(object? value) { if (value is not null && Marshal.IsComObject(value)) Marshal.FinalReleaseComObject(value); }
+
+    [ComImport, Guid("DCB00002-570F-4A9B-8D69-199FDBA5723B"), InterfaceType(ComInterfaceType.InterfaceIsDual)]
+    private interface IBridgeNetworkProfile
+    {
+        [DispId(1)] [return: MarshalAs(UnmanagedType.BStr)] string GetName();
+        [DispId(2)] void SetName([MarshalAs(UnmanagedType.BStr)] string name);
+        [DispId(3)] [return: MarshalAs(UnmanagedType.BStr)] string GetDescription();
+        [DispId(4)] void SetDescription([MarshalAs(UnmanagedType.BStr)] string description);
+        [DispId(5)] Guid GetNetworkId();
+        [DispId(6)] int GetDomainType();
+        [DispId(7)] [return: MarshalAs(UnmanagedType.Interface)] object GetNetworkConnections();
+        [DispId(8)] void GetTimeCreatedAndConnected(out uint createdLow, out uint createdHigh, out uint connectedLow, out uint connectedHigh);
+        [DispId(9)] bool IsConnectedToInternet { [return: MarshalAs(UnmanagedType.VariantBool)] get; }
+        [DispId(10)] bool IsConnected { [return: MarshalAs(UnmanagedType.VariantBool)] get; }
+        [DispId(11)] int GetConnectivity();
+        [DispId(12)] void GetCategory(out BridgeNetworkCategory category);
+        [DispId(13)] void SetCategory(BridgeNetworkCategory category);
+    }
+
+    [ComImport, Guid("DCB00005-570F-4A9B-8D69-199FDBA5723B"), InterfaceType(ComInterfaceType.InterfaceIsDual)]
+    private interface IBridgeNetworkConnection
+    {
+        [DispId(1)] [return: MarshalAs(UnmanagedType.Interface)] IBridgeNetworkProfile GetNetwork();
+        [DispId(2)] bool IsConnectedToInternet { [return: MarshalAs(UnmanagedType.VariantBool)] get; }
+        [DispId(3)] bool IsConnected { [return: MarshalAs(UnmanagedType.VariantBool)] get; }
+        [DispId(4)] int GetConnectivity();
+        [DispId(5)] void GetConnectionId(out Guid connectionId);
+        [DispId(6)] void GetAdapterId(out Guid adapterId);
+        [DispId(7)] int GetDomainType();
+    }
+
+    private enum BridgeNetworkCategory { Public=0, Private=1, DomainAuthenticated=2 }
 }

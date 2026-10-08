@@ -570,10 +570,7 @@ internal sealed class QuotaBar : Control
         _remainingPercent is null ? "额度剩余未知" : $"额度剩余 {_remainingPercent}%";
 }
 
-/// <summary>
-/// 一行额度：标题（窗口长度）＋左侧重置倒计时＋右侧剩余百分比，下面一条 <see cref="QuotaBar"/>。
-/// 全部自绘并实时读主题，避免出现“构造时把浅色烤死、切到深色就看不见”的同类缺陷。
-/// </summary>
+/// <summary>一行额度：标题和剩余百分比、进度条、重置倒计时及本地时间。</summary>
 internal sealed class QuotaBarRow : Panel
 {
     private readonly Font _titleFont = new("Microsoft YaHei UI", 10F, FontStyle.Bold);
@@ -589,7 +586,13 @@ internal sealed class QuotaBarRow : Panel
     internal string CountdownText { get; private set; } = "";
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    internal string ResetDetailText { get; private set; } = "";
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     internal string RemainingText { get; private set; } = "";
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    internal int ResetDetailTop => BarTop + Bar.Height + DetailGap;
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     internal Font TitleFont => _titleFont;
@@ -615,9 +618,10 @@ internal sealed class QuotaBarRow : Panel
     {
         TitleText = title;
         CountdownText = window.ResetCountdownLabel(now);
+        ResetDetailText = window.ResetDetailLabel(now);
         RemainingText = window.RemainingSummary;
         Bar.RemainingPercent = window.RemainingPercent;
-        AccessibleName = $"{title}，{RemainingText}，{CountdownText}";
+        AccessibleName = $"{title}，{RemainingText}，{ResetDetailText}";
         Arrange();
         Invalidate();
     }
@@ -656,18 +660,17 @@ internal sealed class QuotaBarRow : Panel
             e.Graphics.DrawString(TitleText, _titleFont, brush, 0, 0);
         }
 
-        var bodyTop = BodyTop;
-        if (CountdownText.Length > 0)
-        {
-            using var brush = new SolidBrush(MutedColor);
-            e.Graphics.DrawString(CountdownText, _bodyFont, brush, 0, bodyTop);
-        }
-
         if (RemainingText.Length > 0)
         {
-            var size = e.Graphics.MeasureString(RemainingText, _bodyFont);
+            var size = e.Graphics.MeasureString(RemainingText, _titleFont);
             using var brush = new SolidBrush(TitleColor);
-            e.Graphics.DrawString(RemainingText, _bodyFont, brush, Math.Max(0f, Width - size.Width), bodyTop);
+            e.Graphics.DrawString(RemainingText, _titleFont, brush, Math.Max(0f, Width - size.Width), 0);
+        }
+
+        if (ResetDetailText.Length > 0)
+        {
+            using var brush = new SolidBrush(MutedColor);
+            e.Graphics.DrawString(ResetDetailText, _bodyFont, brush, 0, ResetDetailTop);
         }
     }
 
@@ -681,18 +684,18 @@ internal sealed class QuotaBarRow : Panel
         base.Dispose(disposing);
     }
 
-    private float BodyTop => _titleFont.Height + 4f;
+    private const int BarGap = 8;
+    private const int DetailGap = 6;
+    private int BarTop => _titleFont.Height + BarGap;
 
-    private int BarTop => _titleFont.Height + 4 + _bodyFont.Height + 8;
+    private int RowHeight(int dpi) => BarTop + QuotaBar.BarHeight(dpi) + DetailGap + _bodyFont.Height + 2;
 
-    private int RowHeight(int dpi) => BarTop + QuotaBar.BarHeight(dpi) + 2;
-
-    /// <summary>标题 → 副行 → 进度条：条贴着行底，宽度跟随行宽。</summary>
+    /// <summary>标题 → 进度条 → 重置详情；条宽跟随行宽。</summary>
     private void Arrange()
     {
         var barHeight = QuotaBar.BarHeight(DeviceDpi);
         var height = RowHeight(DeviceDpi);
-        Bar.SetBounds(0, height - barHeight - 2, Math.Max(0, ClientSize.Width), barHeight);
+        Bar.SetBounds(0, BarTop, Math.Max(0, ClientSize.Width), barHeight);
         if (Height != height) Height = height;
     }
 }

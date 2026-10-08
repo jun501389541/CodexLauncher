@@ -158,12 +158,23 @@ internal sealed class ScrollHost : Panel, IMessageFilter
     internal bool TryHandleWheel(int screenX, int screenY, int delta)
     {
         if (delta == 0 || !IsOverflowing || !IsHandleCreated || !Visible) return false;
+        // ComboBox 的原生列表 popup 不在 WinForms 子控件树里，但会覆盖页面坐标。
+        // 下拉打开期间放行滚轮，让系统列表自己滚动，避免页面移动后 popup 留在旧位置。
+        if (_content is not null && ContainsOpenDropDown(_content)) return false;
         if (!RectangleToScreen(ClientRectangle).Contains(screenX, screenY)) return false;
 
         // 一个刻度是 120；每格滚多少行由系统设置决定（0 表示整页，这里按一行处理）。
         var lines = SystemInformation.MouseWheelScrollLines <= 0 ? 1 : SystemInformation.MouseWheelScrollLines;
         ScrollBy(-delta * lines / 120 * LineHeight);
         return true;
+    }
+
+    private static bool ContainsOpenDropDown(Control control)
+    {
+        if (control is ComboBox combo && combo.DroppedDown) return true;
+        foreach (Control child in control.Controls)
+            if (ContainsOpenDropDown(child)) return true;
+        return false;
     }
 
     bool IMessageFilter.PreFilterMessage(ref Message m)

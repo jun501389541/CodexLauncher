@@ -6,11 +6,13 @@ namespace CodexLauncher.App;
 /// <summary>Main-window bridge section. All actions run on the UI thread; no secrets leave memory.</summary>
 internal sealed class BridgePanel:UserControl
 {
+    private readonly Func<IReadOnlyList<BridgeAdapterChoice>> _adapterCatalog;
     private readonly Button _toggle=new(){Text="AI 额度桥  ›",Name="BridgeToggle",FlatStyle=FlatStyle.Flat,ForeColor=UiTheme.Text,BackColor=UiTheme.Card,Cursor=Cursors.Hand,UseVisualStyleBackColor=false};
     private readonly TableLayoutPanel _content=new(){Name="BridgeContent",Dock=DockStyle.Top,AutoSize=true,ColumnCount=1,Visible=false,BackColor=UiTheme.Card,ForeColor=UiTheme.Text};
     private bool _expanded;
     private readonly CheckBox _enabled=new(){Text="启用手机额度共享",AutoSize=true};
-    private readonly ComboBox _adapters=new(){DropDownStyle=ComboBoxStyle.DropDownList,Width=260,BackColor=UiTheme.Card,ForeColor=UiTheme.Text};
+    private readonly ComboBox _adapters=new(){Name="BridgeAdapterSelector",DropDownStyle=ComboBoxStyle.DropDownList,Width=360,DropDownWidth=360,MaxDropDownItems=8,BackColor=UiTheme.Card,ForeColor=UiTheme.Text};
+    private readonly ToolTip _adapterToolTip=new(){AutoPopDelay=15000,InitialDelay=400,ReshowDelay=100,ShowAlways=true};
     private readonly Label _adapterInfo=new(){AutoSize=true,MaximumSize=new(900,0),Text="点击“刷新网卡”检测可用于手机配对的 Wi-Fi / 以太网。"};
     private readonly NumericUpDown _port=new(){Minimum=1,Maximum=65535,Value=43189,Width=110,BackColor=UiTheme.Card,ForeColor=UiTheme.Text};
     private readonly Label _status=new(){AutoSize=true,Text="共享已关闭",MaximumSize=new(650,0)};
@@ -24,13 +26,15 @@ internal sealed class BridgePanel:UserControl
     private readonly System.Windows.Forms.Timer _timer=new(){Interval=1000};
     private Form? _hostForm;
     private BridgeRuntime? _runtime;
+    private IReadOnlyList<BridgeAdapterChoice> _checkedAdapters=Array.Empty<BridgeAdapterChoice>();
     private BridgeInvitation? _invitation;
     private BridgePairingService? _invitationOwner;
     private bool _busy;
     internal bool HasInvitation=>_invitation is not null;
     internal event Func<bool,string?,int,Task>? ConfigureRequested;
-    internal BridgePanel()
+    internal BridgePanel(Func<IReadOnlyList<BridgeAdapterChoice>>? adapterCatalog=null)
     {
+        _adapterCatalog=adapterCatalog??BridgeRuntime.AvailableAdapters;
         AutoSize=true;AutoSizeMode=AutoSizeMode.GrowAndShrink;BackColor=UiTheme.Window;ForeColor=UiTheme.Text;Margin=new Padding(0,0,0,14);
         var card=new RoundedPanel{Dock=DockStyle.Top,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,Margin=Padding.Empty};
         var layout=new TableLayoutPanel{Dock=DockStyle.Top,AutoSize=true,ColumnCount=1,Padding=new(22,10,22,16),BackColor=UiTheme.Card,ForeColor=UiTheme.Text};
@@ -41,32 +45,49 @@ internal sealed class BridgePanel:UserControl
         layout.Controls.Add(_toggle);layout.Controls.Add(_content);
         _content.Margin=new Padding(0,8,0,0);_content.ColumnStyles.Add(new(SizeType.Percent,100));
         _adapters.SelectedIndexChanged+=(_,_)=>UpdateAdapterInfo();
+        _adapters.DropDown+=(_,_)=>UpdateAdapterDropDownWidth();
+        _enabled.Click+=(_,_)=>{if(_enabled.Checked)RefreshAdapters();};
+        Disposed+=(_,_)=>_adapterToolTip.Dispose();
         _toggle.Click+=(_,_)=>
         {
-            _expanded=!_expanded;_content.Visible=_expanded;
-            _toggle.Text=_expanded?"AI 额度桥  ⌄":"AI 额度桥  ›";
-            if(!_expanded)ClearInvitation();
-            UpdateRefreshTimer();
-            for(Control? current=_content;current is not null;current=current.Parent)current.PerformLayout();
+            var layoutChain=new List<Control>();
+            for(Control? current=_content;current is not null;current=current.Parent)
+            {
+                current.SuspendLayout();
+                layoutChain.Add(current);
+            }
+            try
+            {
+                _expanded=!_expanded;_content.Visible=_expanded;
+                _toggle.Text=_expanded?"AI 额度桥  ⌄":"AI 额度桥  ›";
+                if(!_expanded)ClearInvitation();
+                UpdateRefreshTimer();
+            }
+            finally
+            {
+                for(var index=layoutChain.Count-1;index>=0;index--)layoutChain[index].ResumeLayout(false);
+                _content.Parent?.PerformLayout();
+            }
         };
         void Add(Control c){c.Margin=new(0,4,0,4);_content.Controls.Add(c);}
-        var config=AlignedRow(
+        var config=WrapRow("BridgeConfigurationRow",
             _enabled,
             _adapters,
             _port,
             Button("应用",async()=>
             {
+                if(_enabled.Checked)RefreshAdapters();
                 var choice=_adapters.SelectedItem as BridgeAdapterChoice;
                 if(_enabled.Checked&&choice?.CanListen!=true)
                     throw new InvalidOperationException(choice?.UnavailableReason??"请先刷新并选择可用的 Wi-Fi / 以太网网卡。");
                 if(ConfigureRequested is {} handler)await handler(_enabled.Checked,choice?.Id,(int)_port.Value);
             },"BridgeApply"),
-            Button("刷新网卡",()=>{RefreshAdapters();return Task.CompletedTask;}));
+            Button("刷新网卡",()=>{RefreshAdapters();return Task.CompletedTask;},"BridgeRefreshAdapters"));
         Add(config);Add(_adapterInfo);
         Add(_status);Add(_identity);Add(_account);
         Add(AlignedRow(_nickname,Button("保存账号昵称",()=>{Required().Grants.RenameCurrentAccount(_nickname.Text);return Task.CompletedTask;})));
         var pairing=Flow();pairing.Controls.Add(Button("显示添加设备二维码",ShowInvitation));pairing.Controls.Add(Button("隐藏二维码",()=>{ClearInvitation();return Task.CompletedTask;}));Add(pairing);Add(_qrInfo);Add(_qr);
-        Add(new Label{Text="待确认申请（核对手机名称与来源，批准会共享当前账号额度）",AutoSize=true});
+        Add(new Label{Text="待确认申请（先点选手机这一行，再点击“批准”；请核对手机名称与来源）",AutoSize=true});
         _pending.Columns.Add("手机名称",200);_pending.Columns.Add("来源",200);_pending.Columns.Add("到期 UTC",180);Add(_pending);
         StyleTable(_pending,200);
         var approve=Flow();approve.Controls.Add(Button("批准",()=>Decide(true)));approve.Controls.Add(Button("拒绝",()=>Decide(false)));Add(approve);
@@ -77,7 +98,16 @@ internal sealed class BridgePanel:UserControl
         manage.Controls.Add(Button("撤销设备",()=>{var id=Selected(_devices);if(id is not null&&Confirm("撤销此设备？之后必须重新扫码配对。"))Required().RevokeDevice(id);return Task.CompletedTask;}));
         manage.Controls.Add(Button("全部撤销",()=>{if(Confirm("撤销所有设备？所有手机都必须重新扫码。"))Required().RevokeAll();return Task.CompletedTask;}));Add(manage);
         var help=Flow();help.Controls.Add(Button("连接排障",()=>{MessageBox.Show(this,BridgeConnectionGuidance.ManualConnection(_runtime?.Status??new("STOPPED"))+"\n自动发现隔离尚未验证，当前使用二维码直连。\n开机启动可在高级设置或托盘开启；后台启动不会打开 Codex。","连接说明");return Task.CompletedTask;}));
-        help.Controls.Add(Button("复制防火墙命令",()=>{Clipboard.SetText(BridgeConnectionGuidance.FirewallCommands(Application.ExecutablePath,(int)_port.Value));MessageBox.Show(this,"已复制。请自行检查后在管理员终端执行；启动器不会提权或修改规则。","防火墙指引");return Task.CompletedTask;}));Add(help);
+        help.Controls.Add(Button("复制防火墙命令",()=>
+        {
+            var status=Required().Status;
+            if(status.State!="RUNNING"||!Uri.TryCreate(status.Endpoint,UriKind.Absolute,out var endpoint)||
+                !System.Net.IPAddress.TryParse(endpoint.Host,out var address))
+                throw new InvalidOperationException("请先选择可用网卡并点击“应用”启动共享，再复制当前地址的防火墙命令。");
+            Clipboard.SetText(BridgeConnectionGuidance.FirewallCommands(Application.ExecutablePath,endpoint.Port,address));
+            MessageBox.Show(this,"已复制公用 / 专用网络规则，仅允许当前程序、监听地址和端口的本地子网连接。请检查后在管理员终端执行；启动器不会提权或修改规则。监听地址变化后需重新生成规则。","防火墙指引");
+            return Task.CompletedTask;
+        }));Add(help);
         _timer.Tick+=(_,_)=>RefreshState();
         HandleCreated+=(_,_)=>UpdateRefreshTimer();
         ParentChanged+=(_,_)=>AttachHostForm();
@@ -115,6 +145,17 @@ internal sealed class BridgePanel:UserControl
         }
     }
     private static UiTheme.WrapPanel Flow()=>new(){Dock=DockStyle.Top,AutoSize=true,BackColor=UiTheme.Card,ForeColor=UiTheme.Text};
+    private static UiTheme.WrapPanel WrapRow(string name,params Control[] controls)
+    {
+        var row=Flow();row.Name=name;row.FlowDirection=FlowDirection.LeftToRight;row.WrapContents=true;row.Margin=Padding.Empty;row.Padding=Padding.Empty;
+        for(var index=0;index<controls.Length;index++)
+        {
+            controls[index].Anchor=AnchorStyles.Left;
+            controls[index].Margin=new Padding(index==0?0:8,0,0,0);
+            row.Controls.Add(controls[index]);
+        }
+        return row;
+    }
     private static TableLayoutPanel AlignedRow(params Control[] controls)
     {
         var row=new TableLayoutPanel
@@ -170,10 +211,12 @@ internal sealed class BridgePanel:UserControl
         var button=UiTheme.SecondaryButton(text);button.Name=name??text;
         button.Click+=async(_,_)=>
         {
-            if(_busy)return;_busy=true;button.Enabled=false;
+            // Disabling the focused button moves focus to the next action (for
+            // approval that is Reject). The busy guard already prevents repeats.
+            if(_busy)return;_busy=true;
             try{await action();RefreshState();}
             catch(Exception e){MessageBox.Show(this,e is InvalidOperationException or ArgumentException?e.Message:"操作失败，请检查权限或连接状态。","AI 额度桥",MessageBoxButtons.OK,MessageBoxIcon.Warning);}
-            finally{_busy=false;if(!button.IsDisposed)button.Enabled=true;}
+            finally{_busy=false;}
         };return button;
     }
     internal void Bind(BridgeRuntime runtime){_runtime=runtime;RefreshAdapters();RefreshState();}
@@ -193,36 +236,61 @@ internal sealed class BridgePanel:UserControl
         _adapters.Items.Clear();
         try
         {
-            var choices=BridgeRuntime.AvailableAdapters();
-            foreach(var item in choices)_adapters.Items.Add(item);
-            if(selected is not null)SetConfiguration(_enabled.Checked,(int)_port.Value,selected);
-            if(_adapters.SelectedItem is null&&_adapters.Items.Count>0)
-                _adapters.SelectedItem=_adapters.Items.Cast<BridgeAdapterChoice>().FirstOrDefault(a=>a.CanListen)??_adapters.Items[0];
+            var choices=_adapterCatalog();
+            _checkedAdapters=choices.ToArray();
+            foreach(var item in _checkedAdapters)_adapters.Items.Add(item);
+            var previous=choices.FirstOrDefault(a=>a.Id==selected);
+            var next=previous?.CanListen==true?previous:choices.FirstOrDefault(a=>a.CanListen);
+            if(next is not null)_adapters.SelectedItem=next;
+            else if(selected is not null)SetConfiguration(_enabled.Checked,(int)_port.Value,selected);
+            else if(_adapters.Items.Count>0)_adapters.SelectedItem=_adapters.Items[0];
             UpdateAdapterInfo();
         }
         catch(Exception e)
         {
+            _checkedAdapters=Array.Empty<BridgeAdapterChoice>();
             _adapterInfo.Text=$"读取网卡列表失败：{e.Message}";
         }
     }
     private void UpdateAdapterInfo()
     {
-        if(_adapters.SelectedItem is BridgeAdapterChoice choice)
-            _adapterInfo.Text=choice.CanListen?"此网卡满足手机配对监听条件。":$"当前不能用于配对：{choice.UnavailableReason}";
-        else if(_adapters.Items.Count==0)
-            _adapterInfo.Text="未检测到 Wi-Fi 或以太网接口。请先连接 Wi-Fi / 网线，再点“刷新网卡”。";
+        var choice=_adapters.SelectedItem as BridgeAdapterChoice;
+        _adapterInfo.Text=BridgeAdapterDisplay.QualificationSummary(_checkedAdapters,choice);
+        _adapterToolTip.SetToolTip(_adapters,choice is not null
+            ?BridgeAdapterDisplay.ToolTipText(choice)
+            :_checkedAdapters.Count==0?"没有检测到可推荐的 Wi-Fi 或以太网接口。":null);
+    }
+    private void UpdateAdapterDropDownWidth()
+    {
+        if(_adapters.IsDisposed||_adapters.Items.Count==0)return;
+        var workingArea=Screen.FromControl(_adapters).WorkingArea;
+        var selectorBounds=_adapters.RectangleToScreen(_adapters.ClientRectangle);
+        var spaceAbove=selectorBounds.Top-workingArea.Top;
+        var spaceBelow=workingArea.Bottom-selectorBounds.Bottom;
+        var availableHeight=Math.Max(0,Math.Max(spaceAbove,spaceBelow)-2*SystemInformation.BorderSize.Height);
+        var itemHeight=Math.Max(1,_adapters.ItemHeight);
+        var visibleItems=Math.Clamp(availableHeight/itemHeight,1,Math.Min(8,_adapters.Items.Count));
+        _adapters.MaxDropDownItems=visibleItems;
+        var availableWidth=BridgeAdapterDisplay.AvailableDropDownWidth(workingArea,selectorBounds);
+        var extraWidth=SystemInformation.VerticalScrollBarWidth+(int)Math.Ceiling(16*_adapters.DeviceDpi/96d);
+        _adapters.DropDownWidth=BridgeAdapterDisplay.CalculateDropDownWidth(
+            _adapters.Items.Cast<BridgeAdapterChoice>().Select(choice=>choice.ToString()),
+            _adapters.Width,
+            availableWidth,
+            name=>TextRenderer.MeasureText(name,_adapters.Font,Size.Empty,TextFormatFlags.SingleLine|TextFormatFlags.NoPadding).Width,
+            extraWidth);
     }
     private BridgeRuntime Required()=>_runtime??throw new InvalidOperationException("请先应用桥设置，再管理设备。");
     private static string? Selected(ListView list)=>list.SelectedItems.Count==1?list.SelectedItems[0].Tag as string:null;
     private bool Confirm(string message)=>MessageBox.Show(this,message,"确认共享操作",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)==DialogResult.Yes;
     private Task Decide(bool approve)
     {
-        var id=Selected(_pending);var pairing=Required().Pairing;
-        if(id is not null&&pairing is not null)
-        {
-            if(approve){if(Confirm("批准所选手机，并授权读取当前账号的额度？")&&!pairing.Approve(id))throw new InvalidOperationException("申请已失效或达到设备上限。");}
-            else pairing.Reject(id);
-        }return Task.CompletedTask;
+        var id=Selected(_pending);
+        if(id is null)throw new InvalidOperationException("请先点击选中“待确认申请”里的手机那一行，再点击“批准”或“拒绝”。");
+        var pairing=Required().Pairing??throw new InvalidOperationException("共享已停止，请重新应用共享设置，让手机重新扫码申请。");
+        if(approve){if(Confirm("批准所选手机，并授权读取当前账号的额度？")&&!pairing.Approve(id))throw new InvalidOperationException("申请已失效或达到设备上限，请让手机重新扫码申请，或撤销不用的设备后重试。");}
+        else pairing.Reject(id);
+        return Task.CompletedTask;
     }
     private Task Rename()
     {
@@ -235,7 +303,7 @@ internal sealed class BridgePanel:UserControl
     }
     internal Task ShowInvitation()
     {
-        ClearInvitation();var pairing=Required().Pairing??throw new InvalidOperationException("共享未监听，请检查选定 Private 网卡。");
+        ClearInvitation();var pairing=Required().Pairing??throw new InvalidOperationException("共享未监听，请检查选定 Wi-Fi / 以太网网卡并点击“应用”。");
         var result=pairing.CreateInvitation();if(result.Value is null)throw new InvalidOperationException(result.ErrorCode);
         _invitation=result.Value;_invitationOwner=pairing;
         using var data=QRCodeGenerator.GenerateQrCode(pairing.DevicePageUrl(_invitation),QRCodeGenerator.ECCLevel.Q);using var code=new PngByteQRCode(data);
@@ -251,7 +319,7 @@ internal sealed class BridgePanel:UserControl
         {
             var s=_runtime.Status;
             _status.Text=$"状态：{s.State}  {s.Endpoint}\n{s.ErrorCode ?? s.DiscoveryErrorCode}";
-            if(_runtime.SelectedAdapter is null)_status.Text="请选择连接手机同一局域网的实体 Wi-Fi / 以太网（Windows 网络类型为“专用”），再点“应用”。";
+            if(_runtime.SelectedAdapter is null)_status.Text="请选择连接手机同一局域网的实体 Wi-Fi / 以太网（公用、专用网络均支持），再点“应用”。";
             _identity.Text=(_runtime.IdentityWasReset?"身份已重置：旧设备需重新扫码。\n":"")+"证书 SHA-256："+_runtime.Fingerprint;
             var account=_runtime.Grants.CurrentAccount;
             _account.Text=account is null?"当前账号不可识别或监测关闭；配对后暂不共享额度。":"共享范围："+account.DisplayName+" 的只读额度；换号后需逐设备重新授权。";

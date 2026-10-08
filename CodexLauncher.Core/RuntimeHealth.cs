@@ -106,7 +106,10 @@ public sealed record RuntimeHealthSnapshot(
         get
         {
             var elapsed = Elapsed is null ? "—" : $"{Elapsed.Value.TotalMilliseconds:0} ms";
-            return $"路径：{RouteLabel}\n证据：{(Evidence == RuntimeEvidenceSource.LineAndDiagnostics ? "线路 + 诊断事件" : "仅线路检测")}\n耗时：{elapsed}\n更新时间：{CheckedAt:HH:mm:ss}";
+            var routeLine = RouteLabel.StartsWith("固定入口 · ", StringComparison.Ordinal)
+                ? $"路径：固定入口·{RouteLabel["固定入口 · ".Length..]}"
+                : $"路径：{RouteLabel}";
+            return $"{routeLine}\n证据：{(Evidence == RuntimeEvidenceSource.LineAndDiagnostics ? "线路 + 诊断事件" : "仅线路检测")}\n耗时：{elapsed}\n更新时间：{CheckedAt:HH:mm:ss}";
         }
     }
 }

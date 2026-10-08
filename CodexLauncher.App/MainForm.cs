@@ -5,6 +5,9 @@ namespace CodexLauncher.App;
 
 public sealed class MainForm : Form
 {
+    private const int WmSettingChange = 0x001A;
+    private const int WmTimeChange = 0x001E;
+
     private readonly TextBox _proxyInput = new()
     {
         Dock = DockStyle.Fill,
@@ -105,7 +108,7 @@ public sealed class MainForm : Form
     private readonly Label _quotaAccount = new()
     {
         AutoSize = true,
-        MaximumSize = new Size(620, 0),
+        MaximumSize = new Size(900, 0),
         ForeColor = UiTheme.Muted,
         Margin = new Padding(0, 0, 0, 6)
     };
@@ -772,6 +775,18 @@ public sealed class MainForm : Form
         };
 
         // 句柄创建后才接收重复启动信号；命名事件会保留提前到达的信号。
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        base.WndProc(ref m);
+        if (m.Msg == WmSettingChange)
+            TimeZoneInfo.ClearCachedData();
+        else if (m.Msg != WmTimeChange)
+            return;
+
+        if (!IsDisposed && _quotaSnapshot is { } snapshot)
+            RenderQuotaBars(snapshot, DateTimeOffset.Now);
     }
 
     protected override void SetVisibleCore(bool value)

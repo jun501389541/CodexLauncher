@@ -55,7 +55,10 @@ internal sealed class WindowsBridgeNetworkSource : IBridgeNetworkSource
     {
         InvalidOperationException {Message:"PRIVATE_IPV4_REQUIRED"}=>"PRIVATE_IPV4_REQUIRED",
         InvalidOperationException {Message:"PHYSICAL_ADAPTER_REQUIRED"}=>"PHYSICAL_ADAPTER_REQUIRED",
-        InvalidOperationException {Message:"PRIVATE_NETWORK_REQUIRED"}=>"PRIVATE_NETWORK_REQUIRED",
+        InvalidOperationException {Message:"NETWORK_PROFILE_UNAVAILABLE"}=>"NETWORK_PROFILE_UNAVAILABLE",
+        InvalidOperationException {Message:"NETWORK_PROFILE_UNSUPPORTED"}=>"NETWORK_PROFILE_UNSUPPORTED",
+        InvalidOperationException {Message:"NETWORK_PROFILE_CHECK_FAILED"}=>"NETWORK_PROFILE_CHECK_FAILED",
+        System.ComponentModel.Win32Exception e=>$"NETWORK_HARDWARE_CHECK_FAILED_{e.NativeErrorCode}",
         UnauthorizedAccessException=>"NETWORK_POLICY_ACCESS_DENIED",
         System.Runtime.InteropServices.COMException {HResult:unchecked((int)0x80070005)}=>"NETWORK_POLICY_ACCESS_DENIED",
         _=>"NETWORK_POLICY_CHECK_FAILED"

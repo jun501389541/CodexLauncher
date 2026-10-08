@@ -45,7 +45,11 @@
 
 只有 `OK / STALE / AUTH_REQUIRED / NO_DATA / NETWORK_ERROR / UNSUPPORTED` 六个状态。监测关闭返回 `NO_DATA + QUOTA_MONITORING_DISABLED`，不启动 provider。可用空窗口映射 `NO_DATA`，不是 `OK`。
 
-默认桥关闭。监听按明确的物理私有 IPv4 地址绑定，默认端口 43189；实体网卡与 Private 状态无法验证时暂停，每次请求重新检查。阶段四固定 adapterId，在地址变化时停旧再绑新，休眠暂停、恢复重验，证书与 bridgeId 保持稳定，旧邀请失效。真实局域网正向监听尚未验收。绝不退回全地址监听/全网卡广播。发现类型 `_aiusage._tcp.local`，仅含 Bridge ID、协议版本和定位信息；默认 `MDNS_ISOLATION_UNVERIFIED` 在创建 socket 前阻塞，二维码直连保留。Makaretu 的接口筛选不足以证明传统单播回复路径的出站隔离，须实际修正与验证后再启用。
+默认桥关闭。监听按明确的物理私有 IPv4 地址绑定，默认端口 43189。Windows 网络类型支持 Public（公用）与 Private（专用），不必为了共享修改系统网络类型；DomainAuthenticated 暂不支持。实体网卡或网络类型无法验证时暂停，每次请求重新检查。阶段四固定 adapterId，在地址变化时停旧再绑新，休眠暂停、恢复重验，证书与 bridgeId 保持稳定，旧邀请失效。真实局域网正向监听尚未验收。绝不退回全地址监听/全网卡广播。发现类型 `_aiusage._tcp.local`，仅含 Bridge ID、协议版本和定位信息；默认 `MDNS_ISOLATION_UNVERIFIED` 在创建 socket 前阻塞，二维码直连保留。Makaretu 的接口筛选不足以证明传统单播回复路径的出站隔离，须实际修正与验证后再启用。
+
+“可用 / 推荐”表示网卡符合本机监听策略，不表示已验证手机能穿过防火墙访问。手机与电脑需在同一局域网；配对仍要求 HTTPS、一次性邀请、本机批准和设备授权。共享运行后可复制防火墙命令，规则覆盖 Public / Private，限定当前程序、实际监听 IPv4、TCP 端口和 LocalSubnet 来源。启动器只生成命令文本，用户检查后自行在管理员终端执行；不会自动修改规则或系统网络类型。监听地址或程序路径变化后需重新生成规则，并自行移除不再使用的旧规则。较早阶段报告里的 Private-only 描述记录当时行为，以本段为当前实现说明。
+
+实体网卡通过 Windows IP Helper 的 `ConvertInterfaceGuidToLuid` / `GetIfEntry2` 按选定 GUID 查询，要求 `HardwareInterface` 标志且排除 `FilterInterface`；不再依赖 WMI 服务或其 COM 自动化权限。网络类型仍由 Network List Manager 验证。读取失败会区分硬件信息（含 Windows 错误码）与网络类型读取阶段。
 
 HTTP 层执行 16 KiB 请求体上限（包含分块与 HTTP/2 无长度正文）、每设备 60 次/分钟及配对每来源 5 次/分钟滑动窗口，并返回 `429 + Retry-After`。同源页可访问，不开放宽松 CORS，并拒绝跨站请求；不能只靠不设置 CORS 阻止跨站提交。产品日志复用 DiagnosticLogger 的 `bridge-*` 分类，不写请求体、认证头、二维码或额度原文。
 
