@@ -4,6 +4,7 @@ dist/
 artifacts/
 graphflow-out/
 .graphflow-cache/
+.graphflow/
 .dsh-vision-router/
 .vs/
 *.user

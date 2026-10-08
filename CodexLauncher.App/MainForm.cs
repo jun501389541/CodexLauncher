@@ -130,6 +130,7 @@ public sealed class MainForm : Form
         Margin = new Padding(0, 0, 0, 6)
     };
     private readonly Button _quotaRefreshButton = UiTheme.SecondaryButton("刷新额度");
+    private readonly QuotaResetCreditsPanel _quotaResetCredits = new();
     private readonly Label _processNotice = new()
     {
         AutoSize = true,
@@ -365,11 +366,12 @@ public sealed class MainForm : Form
         };
 
         var scroll = new ScrollHost { Dock = DockStyle.Fill, BackColor = UiTheme.Window };
-        var root = new TableLayoutPanel
+        var root = new PageContentLayout
         {
-            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            // ResizeRoot owns the width. Right anchoring resizes it again during
+            // parent layout, causing intermediate widths and repeated AutoSize passes.
+            Anchor = AnchorStyles.Top | AnchorStyles.Left,
+            AutoSize = false,
             ColumnCount = 1,
             RowCount = 6,
             Padding = new Padding(24, 12, 24, 24),
@@ -388,10 +390,41 @@ public sealed class MainForm : Form
             // 右侧给自绘指示条留出位置：以前写死 -4，指示条会被卡片压住。
             var reserved = ScrollHost.IndicatorWidth(DeviceDpi) + ScrollHost.IndicatorMargin(DeviceDpi);
             var width = Math.Max(1, scroll.ClientSize.Width - reserved);
-            root.MaximumSize = new Size(width, 0);
-            root.Width = width;
+            if (root.Width == width) return;
+            scroll.SuspendLayout();
+            root.SuspendLayout();
+            try
+            {
+                root.Width = width;
+            }
+            finally
+            {
+                root.ResumeLayout(false);
+                scroll.ResumeLayout(false);
+            }
+            root.PerformLayout();
         }
-        scroll.SizeChanged += (_, _) => ResizeRoot();
+        // Native sizing can deliver several widths before the next paint. Keep
+        // the latest one and lay out the page once, then flush on mouse release.
+        var resizeTimer = new System.Windows.Forms.Timer { Interval = 16 };
+        var interactiveResize = false;
+        resizeTimer.Tick += (_, _) => { resizeTimer.Stop(); ResizeRoot(); };
+        ResizeBegin += (_, _) => interactiveResize = true;
+        ResizeEnd += (_, _) =>
+        {
+            interactiveResize = false;
+            resizeTimer.Stop();
+            ResizeRoot();
+        };
+        Disposed += (_, _) => resizeTimer.Dispose();
+        scroll.SizeChanged += (_, _) =>
+        {
+            if (interactiveResize)
+            {
+                if (!resizeTimer.Enabled) resizeTimer.Start();
+            }
+            else ResizeRoot();
+        };
         ResizeRoot();
         scroll.SetContent(root);
         var shell = new TableLayoutPanel
@@ -583,6 +616,9 @@ public sealed class MainForm : Form
     {
         var card = new RoundedPanel { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Margin = new Padding(0, 0, 0, 14) };
         var layout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, Padding = new Padding(22, 18, 22, 18), BackColor = Color.White };
+        // 列宽跟随卡片可用宽度，避免 AutoSize 列把子控件上一次的宽度当作最小宽度。
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        _quotaBars.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         var header = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, Margin = new Padding(0, 0, 0, 4) };
         header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -594,6 +630,7 @@ public sealed class MainForm : Form
         layout.Controls.Add(header);
         layout.Controls.Add(_quotaDetail);
         layout.Controls.Add(_quotaBars);
+        layout.Controls.Add(_quotaResetCredits);
         layout.Controls.Add(_quotaAccount);
         layout.Controls.Add(_quotaFreshness);
         card.Controls.Add(layout);
@@ -786,7 +823,10 @@ public sealed class MainForm : Form
             return;
 
         if (!IsDisposed && _quotaSnapshot is { } snapshot)
+        {
             RenderQuotaBars(snapshot, DateTimeOffset.Now);
+            _quotaResetCredits.Render(snapshot.ResetCredits,DateTimeOffset.Now);
+        }
     }
 
     protected override void SetVisibleCore(bool value)
@@ -811,6 +851,16 @@ public sealed class MainForm : Form
             EnsureBridge();_bridgePanel.SetConfiguration(true,_bridgePort??43189,_bridge!.SelectedAdapter);
             await _bridge.StartAsync(_bridgePort??43189);_bridgePanel.RefreshState();
         }
+        if(_background&&!_closing.IsCancellationRequested)
+        {
+            // Restore monitoring without persisting desktop discovery over saved preferences.
+            RestoreConnectionPreferences(load.Settings);
+            SetProxyText(load.Settings.ProxyUrl??DetectLocalProxy()?.ToString()??"");
+            _installation=await new CodexAppLocator(_commands).FindAsync(_closing.Token);
+            if(_closing.IsCancellationRequested)return;
+            RefreshDesktop();UpdateHealth();
+            StartMonitoringTimers();
+        }
     }
     private void EnsureBridge()
     {
@@ -824,7 +874,7 @@ public sealed class MainForm : Form
         await InitializeCoreAsync();
         if(_closing.IsCancellationRequested)return;
         EnsureBridge();
-        if(enabled&&adapter is null)throw new InvalidOperationException("请明确选择一张物理 Private IPv4 网卡。");
+        if(enabled&&adapter is null)throw new InvalidOperationException("请选择连接手机同一局域网的 Wi-Fi / 以太网网卡。");
         if(adapter is not null)_bridge!.SelectAdapter(adapter);
         _bridgeEnabled=enabled;_bridgePort=port;SavePreferences(_proxyInput.Text);
         if(enabled)await _bridge!.StartAsync(port);else await _bridge!.StopAsync();
@@ -848,14 +898,8 @@ public sealed class MainForm : Form
         _desktopInitialized=true;
         _launcher.Recover();
         var settings = _settings.Load();
-        _mihomoPath = settings.MihomoPath ?? _mihomoPath;
         ApplyPreferences(settings);
-        if (settings.PartyPort is > 0 and <= 65535 && settings.VergePort is > 0 and <= 65535)
-        {
-            var savedPorts = _gatewayPorts with { Party = settings.PartyPort.Value, Verge = settings.VergePort.Value };
-            try { GatewayConfig.Build(savedPorts); _gatewayPorts = savedPorts; }
-            catch (ArgumentException) { }
-        }
+        RestoreConnectionPreferences(settings);
         await RefreshUpstreamPortsAsync(force: true);
         var savedProxy = settings.ProxyUrl ?? DetectLocalProxy()?.ToString();
         GatewaySnapshot? gateway = null;
@@ -881,10 +925,8 @@ public sealed class MainForm : Form
         UpdateRouteButtons();
         if (_installation is not null) await CheckAsync();
         else UpdateHealth();
-        _portTimer.Start();
-        _healthTimer.Start();
-        StartRuntimeMonitor();
-        _diagnosticTimer.Start();
+        if(_closing.IsCancellationRequested)return;
+        StartMonitoringTimers();
         StartQuotaProvider();
         await ReadDiagnosticsAsync();
     }
@@ -961,6 +1003,25 @@ public sealed class MainForm : Form
         _monitor.Start();
     }
 
+    private void RestoreConnectionPreferences(LauncherSettings settings)
+    {
+        _mihomoPath=settings.MihomoPath??_mihomoPath;
+        if(settings.PartyPort is >0 and <=65535&&settings.VergePort is >0 and <=65535)
+        {
+            var savedPorts=_gatewayPorts with{Party=settings.PartyPort.Value,Verge=settings.VergePort.Value};
+            try{GatewayConfig.Build(savedPorts);_gatewayPorts=savedPorts;}
+            catch(ArgumentException){ }
+        }
+    }
+
+    private void StartMonitoringTimers()
+    {
+        _portTimer.Start();
+        _healthTimer.Start();
+        StartRuntimeMonitor();
+        _diagnosticTimer.Start();
+    }
+
     /// <summary>主窗、托盘和悬浮窗共用同一个快照，不各自启动定时探测。</summary>
     private void OnSnapshotChanged(RuntimeHealthSnapshot snapshot) =>
         BeginInvoke(() => RenderRuntime(snapshot));
@@ -1021,6 +1082,8 @@ public sealed class MainForm : Form
             ? $"共 {snapshot.Buckets.Count} 个额度桶 · 检查于 {snapshot.CheckedAt:HH:mm:ss}"
             : snapshot.Detail;
         RenderQuotaBars(snapshot, DateTimeOffset.Now);
+        _quotaResetCredits.Render(snapshot.ResetCredits,DateTimeOffset.Now);
+        _quotaResetCredits.Visible=snapshot.AccountKind==QuotaAccountKind.ChatGpt;
 
         // 账号归属：始终显示查询账号与计划，无法确认与桌面账号一致时提示核对。
         var account = "账号：" + snapshot.AccountLabel;

@@ -63,7 +63,6 @@ internal sealed class BridgePairingService : IDisposable
         lock (_sync)
         {
             ThrowIfDisposed(); Cleanup();
-            if (_devices.ActiveCount >= 20) return Fail<BridgeInvitation>(409, "DEVICE_LIMIT_REACHED");
             var raw = RandomNumberGenerator.GetBytes(32);
             try
             {
@@ -85,7 +84,6 @@ internal sealed class BridgePairingService : IDisposable
             ThrowIfDisposed(); var now = Now; Cleanup(); var sourceKey = SourceKey(source);
             var retry = CountSource(sourceKey, now);
             if (retry > 0) return Fail<BridgePairAccepted>(429, "PAIR_RATE_LIMITED", retry);
-            if (_devices.ActiveCount >= 20) return Fail<BridgePairAccepted>(409, "DEVICE_LIMIT_REACHED");
             if (_sessions.Values.Count(s => s.State == "PendingApproval") >= 20) return Fail<BridgePairAccepted>(409, "PAIR_CAPACITY_REACHED");
             if (request.PairToken is null || !BridgeTokens.TryDecode(request.PairToken, out var pairBytes))
                 return Fail<BridgePairAccepted>(400, "PAIR_TOKEN_INVALID");
@@ -139,11 +137,42 @@ internal sealed class BridgePairingService : IDisposable
             var device = _devices.AddApproved(session.DeviceName, out var token);
             try
             {
-                _grants.ConfirmCurrentAccount(device.Id);
+                if (!_grants.ConfirmCurrentAccount(device.Id))
+                {
+                    _devices.Revoke(device.Id);
+                    return false;
+                }
                 session.DeviceId = device.Id; session.DeviceToken = token; session.DeliveryExpiresAt = Now.AddMinutes(2); session.State = "Approved";
                 return true;
             }
             catch { _devices.Revoke(device.Id); _grants.Revoke(device.Id); throw; }
+        }
+    }
+    internal bool ReplaceApproved(string pairId, string existingDeviceId)
+    {
+        lock (_sync)
+        {
+            ThrowIfDisposed(); Cleanup();
+            if (!_sessions.TryGetValue(pairId, out var session) || session.State != "PendingApproval" ||
+                !_devices.List().Any(device => device.Id == existingDeviceId)) return false;
+
+            var replacement = _devices.ReplaceApproved(existingDeviceId, session.DeviceName,
+                id => _grants.ConfirmCurrentAccount(id), id => _grants.Revoke(id), out var token);
+            if (replacement is null) return false;
+
+            // The device-store swap invalidates the old bearer atomically. Its grant is
+            // now unreachable; prune it from the current account when persistence allows.
+            try { _grants.Revoke(existingDeviceId); } catch { }
+            foreach (var oldSession in _sessions.Values.Where(s => s.DeviceId == existingDeviceId))
+            {
+                oldSession.DeviceToken = null;
+                if (oldSession.State == "Approved") oldSession.State = "Expired";
+            }
+            session.DeviceId = replacement.Id;
+            session.DeviceToken = token;
+            session.DeliveryExpiresAt = Now.AddMinutes(2);
+            session.State = "Approved";
+            return true;
         }
     }
     internal bool Reject(string pairId)

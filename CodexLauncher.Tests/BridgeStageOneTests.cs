@@ -10,6 +10,7 @@ internal static class BridgeStageOneTests
         ("cancelling first quota waiter does not cancel other consumers or poison future reads", () => CancellationIsolation().GetAwaiter().GetResult()),
         ("provider disposal cancels an upstream read without publishing late data", () => DisposalCancelsUpstream().GetAwaiter().GetResult()),
         ("bridge contracts redact identities and preserve timestamps across failures", Contracts),
+        ("bridge publishes reset-credit fields in the Android-compatible wire shape", ResetCreditContract),
         ("bridge invalidates grants on account changes including switching back", () => Grants().GetAwaiter().GetResult()),
         ("disabled shared coordinator does not open an upstream session", () => DisabledCoordinator().GetAwaiter().GetResult()),
         ("stable rate-response identity clears old quota before a failed new-account query", () => StableAccountSwitch().GetAwaiter().GetResult())
@@ -127,6 +128,78 @@ internal static class BridgeStageOneTests
         Check(disabled.Status == "NO_DATA" && disabled.ErrorCode == "QUOTA_MONITORING_DISABLED" && disabled.QuotaWindows.Count == 0, "disabled monitoring leaked cache");
     }
 
+    private static void ResetCreditContract()
+    {
+        var now = DateTimeOffset.Parse("2026-10-08T12:00:00Z");
+        var expiry = DateTimeOffset.Parse("2026-11-07T06:40:00Z").ToUnixTimeSeconds();
+        var account = new QuotaAccount(QuotaAccountKind.ChatGpt, null, "plus", true, null, "synthetic");
+        var source = "{\"rateLimits\":{\"primary\":{\"usedPercent\":25}},\"rateLimitResetCredits\":{\"availableCount\":3,\"credits\":["
+            + "{\"title\":\"Full reset\",\"description\":\"Weekly + 5 hr\",\"resetType\":\"codexRateLimits\",\"status\":\"available\",\"expiresAt\":"
+            + expiry.ToString(System.Globalization.CultureInfo.InvariantCulture) + "},"
+            + "{\"title\":\"Unknown expiry\",\"description\":null,\"resetType\":\"codexRateLimits\",\"status\":\"available\"},"
+            + "{\"title\":\"No expiry\",\"description\":null,\"resetType\":\"codexRateLimits\",\"status\":\"available\",\"expiresAt\":null}]}}";
+        var snapshot = QuotaResponseParser.Build(account, source, now);
+        var mapped = UsageResultMapper.Map("bridge", "account", "Codex账号", snapshot);
+        using var wire = JsonDocument.Parse(JsonSerializer.Serialize(mapped, BridgeJson.Options));
+        var root = wire.RootElement;
+        Check(root.GetProperty("rateLimitResetCreditsStatus").GetString() == "AVAILABLE", "available reset cards did not carry their status");
+        var cards = root.GetProperty("rateLimitResetCredits");
+        using var schema = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "bridge-contracts", "usage-result.schema.json")));
+        var required = schema.RootElement.GetProperty("required").EnumerateArray().Select(item => item.GetString()).ToHashSet(StringComparer.Ordinal);
+        Check(!required.Contains("rateLimitResetCredits") && !required.Contains("rateLimitResetCreditsStatus"), "new reset-card fields must remain optional for existing v1 clients");
+        Check(schema.RootElement.GetProperty("properties").TryGetProperty("rateLimitResetCredits", out _), "reset-card payload is missing from the published schema");
+        var cardShape = schema.RootElement.GetProperty("$defs").GetProperty("RateLimitResetCredit");
+        var cardAllowed = cardShape.GetProperty("properties").EnumerateObject().Select(item => item.Name).ToHashSet(StringComparer.Ordinal);
+        var cardRequired = cardShape.GetProperty("required").EnumerateArray().Select(item => item.GetString()!).ToHashSet(StringComparer.Ordinal);
+        Check(cardRequired.SetEquals(["resetType", "status", "title", "description"]) && cardAllowed.SetEquals(["resetType", "status", "title", "description", "expiresAt"]),
+            "reset-card detail schema does not match the Android reader fields");
+        Check(cards.GetProperty("availableCount").GetInt64() == 3, "authoritative reset-card count was lost");
+        var rows = cards.GetProperty("credits");
+        Check(rows.GetArrayLength() == 3, "reset-card details were not forwarded");
+        var knownExpiry = rows[0];
+        Check(knownExpiry.GetProperty("expiresAt").GetString() == "2026-11-07T06:40:00.0000000Z", "reset-card expiry was not serialized as UTC ISO-8601");
+        Check(!knownExpiry.TryGetProperty("titleLabel", out _) && !knownExpiry.TryGetProperty("id", out _), "UI helpers or redeemable identifiers leaked into the Bridge response");
+        Check(!rows[1].TryGetProperty("expiresAt", out _), "unknown expiry was serialized as no-expiry");
+        Check(rows[2].GetProperty("expiresAt").ValueKind == JsonValueKind.Null, "known no-expiry was confused with unknown expiry");
+
+        var countOnly = QuotaResponseParser.Build(account,
+            """{"rateLimits":{"primary":{"usedPercent":25}},"rateLimitResetCredits":{"availableCount":4}}""", now);
+        using var countOnlyWire = JsonDocument.Parse(JsonSerializer.Serialize(UsageResultMapper.Map("b", "a", "n", countOnly), BridgeJson.Options));
+        Check(countOnlyWire.RootElement.GetProperty("rateLimitResetCredits").GetProperty("credits").ValueKind == JsonValueKind.Null,
+            "count-only reset-card data was changed into an empty list");
+        var cardsWithoutWindows = QuotaResponseParser.Build(account,
+            """{"rateLimitsByLimitId":{},"rateLimitResetCredits":{"availableCount":3,"credits":[]}}""", now);
+        var cardsOnlyResult = UsageResultMapper.Map("b", "a", "n", cardsWithoutWindows);
+        Check(cardsOnlyResult.RateLimitResetCredits?.AvailableCount == 3 && cardsOnlyResult.RateLimitResetCreditsStatus == "AVAILABLE",
+            "valid reset cards disappeared when quota windows were absent");
+        Check(UsageResultMapper.Map("b", "a", "n", cardsWithoutWindows, false).RateLimitResetCredits is null,
+            "disabled monitoring exposed reset cards");
+        var zero = QuotaResponseParser.Build(account,
+            """{"rateLimits":{"primary":{"usedPercent":25}},"rateLimitResetCredits":{"availableCount":0,"credits":[]}}""", now);
+        using var zeroWire = JsonDocument.Parse(JsonSerializer.Serialize(UsageResultMapper.Map("b", "a", "n", zero), BridgeJson.Options));
+        var zeroCredits = zeroWire.RootElement.GetProperty("rateLimitResetCredits");
+        Check(zeroCredits.GetProperty("availableCount").GetInt64() == 0 && zeroCredits.GetProperty("credits").GetArrayLength() == 0,
+            "known zero reset cards were confused with unknown detail");
+
+        var missing = QuotaResponseParser.Build(account, """{"rateLimits":{"primary":{"usedPercent":25}}}""", now);
+        using var missingWire = JsonDocument.Parse(JsonSerializer.Serialize(UsageResultMapper.Map("b", "a", "n", missing), BridgeJson.Options));
+        Check(missingWire.RootElement.GetProperty("rateLimitResetCreditsStatus").GetString() == "NOT_RETURNED",
+            "missing reset-card data was not distinguished from an older Bridge");
+        Check(!missingWire.RootElement.TryGetProperty("rateLimitResetCredits", out _),
+            "missing reset-card details were emitted as a malformed null object");
+        var malformed = QuotaResponseParser.Build(account,
+            """{"rateLimits":{"primary":{"usedPercent":25}},"rateLimitResetCredits":{"availableCount":"many"}}""", now);
+        using var malformedWire = JsonDocument.Parse(JsonSerializer.Serialize(UsageResultMapper.Map("b", "a", "n", malformed), BridgeJson.Options));
+        Check(malformedWire.RootElement.GetProperty("rateLimitResetCreditsStatus").GetString() == "INVALID_FORMAT",
+            "malformed reset-card data was not reported to Android");
+
+        const string oldPayload = """{"schemaVersion":1,"bridgeId":"b","providerId":"codex","accountId":"a","displayName":"n","status":"NO_DATA","quotaWindows":[],"updatedAt":"2026-10-08T12:00:00Z","dataTimestamp":null,"sourceTimestamp":null,"isStale":false,"errorCode":null}""";
+        var legacy = JsonSerializer.Deserialize<UsageResult>(oldPayload, BridgeJson.Options);
+        Check(legacy is not null && typeof(UsageResult).GetProperty("RateLimitResetCredits")?.GetValue(legacy) is null &&
+            typeof(UsageResult).GetProperty("RateLimitResetCreditsStatus")?.GetValue(legacy) is null,
+            "the additive reset-card fields broke deserialization of a v1 payload");
+    }
+
     private static async Task Grants()
     {
         var factory = new MutableQuotaFactory();
@@ -216,7 +289,8 @@ internal static class BridgeStageOneTests
         {
             var actual = value.EnumerateObject().Select(p => p.Name).ToHashSet(StringComparer.Ordinal);
             var required = shape.GetProperty("required").EnumerateArray().Select(p => p.GetString()!).ToHashSet(StringComparer.Ordinal);
-            Check(actual.SetEquals(required), "serialized fields diverge from published contract");
+            var allowed = shape.GetProperty("properties").EnumerateObject().Select(p => p.Name).ToHashSet(StringComparer.Ordinal);
+            Check(required.IsSubsetOf(actual) && actual.IsSubsetOf(allowed), "serialized fields diverge from published contract");
         }
     }
 

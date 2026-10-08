@@ -49,6 +49,18 @@
         "$ref": "#/$defs/UsageWindow"
       }
     },
+    "rateLimitResetCredits": {
+      "description": "Optional reset-card details. availableCount is authoritative; credits=null means details are unavailable, while an empty array means the returned detail list is empty.",
+      "$ref": "#/$defs/RateLimitResetCredits"
+    },
+    "rateLimitResetCreditsStatus": {
+      "description": "Whether reset-credit data was returned in the source quota response and parsed successfully.",
+      "enum": [
+        "AVAILABLE",
+        "NOT_RETURNED",
+        "INVALID_FORMAT"
+      ]
+    },
     "updatedAt": {
       "type": "string",
       "format": "date-time",
@@ -81,6 +93,69 @@
     }
   },
   "$defs": {
+    "RateLimitResetCredits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "availableCount",
+        "credits"
+      ],
+      "properties": {
+        "availableCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "credits": {
+          "description": "Null means no detail rows were returned; an empty array is a known empty detail list.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/RateLimitResetCredit"
+          }
+        }
+      }
+    },
+    "RateLimitResetCredit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resetType",
+        "status",
+        "title",
+        "description"
+      ],
+      "properties": {
+        "resetType": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expiresAt": {
+          "description": "UTC timestamp, or null when the card has no expiry. Omitted when the source did not provide a usable expiry.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time",
+          "pattern": "Z$"
+        }
+      }
+    },
     "UsageWindow": {
       "type": "object",
       "additionalProperties": false,

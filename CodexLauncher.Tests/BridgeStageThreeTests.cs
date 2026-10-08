@@ -16,6 +16,7 @@ internal static class BridgeStageThreeTests
         ("concurrent scans create exactly one pending pairing", () => ConcurrentScan().GetAwaiter().GetResult()),
         ("pair approval rejection expiry and per-source throttling are enforced", () => ExpiryAndThrottle().GetAwaiter().GetResult()),
         ("device capacity is twenty and revocation immediately frees access", () => Capacity().GetAwaiter().GetResult()),
+        ("pair replacement is explicit, preserves same-name devices, and invalidates the replaced token", () => Replacement().GetAwaiter().GetResult()),
         ("device hashes and account grants survive restart but account changes revoke", () => PersistenceAndSwitch().GetAwaiter().GetResult()),
         ("malformed device records reset to an empty fail-closed store", () => CorruptDeviceStore().GetAwaiter().GetResult()),
         ("Kestrel pairing routes enforce approval, replay, and invitation expiry", () => HttpPairing().GetAwaiter().GetResult())
@@ -110,6 +111,77 @@ internal static class BridgeStageThreeTests
         Check(f.Pairing.Pending().Count == 1, "concurrent replay created multiple pending devices");
     }
 
+    private static async Task Replacement()
+    {
+        await using var f = new Fixture();
+
+        var firstInvitation = Invite(f);
+        var first = f.Pairing.RequestPair(new BridgePairRequest(firstInvitation.PairToken, "Same phone"), IPAddress.Parse("192.168.1.31"));
+        Check(first.Value is not null && f.Pairing.Approve(first.Value.PairId), "initial same-name device approval failed");
+        var oldDelivery = f.Pairing.GetStatus(first.Value!.PairId, first.Value.SessionToken).Value!;
+        var oldId = oldDelivery.DeviceId!;
+        var oldToken = oldDelivery.DeviceToken!;
+        Check(f.Pairing.Acknowledge(first.Value.PairId, first.Value.SessionToken).StatusCode == 204, "initial device delivery failed");
+
+        var secondInvitation = Invite(f);
+        var second = f.Pairing.RequestPair(new BridgePairRequest(secondInvitation.PairToken, "Same phone"), IPAddress.Parse("192.168.1.32"));
+        Check(second.Value is not null && f.Pairing.Approve(second.Value.PairId), "ordinary approval of a same-name device failed");
+        var secondDelivery = f.Pairing.GetStatus(second.Value!.PairId, second.Value.SessionToken).Value!;
+        var secondId = secondDelivery.DeviceId!;
+        var secondToken = secondDelivery.DeviceToken!;
+        Check(f.Pairing.Acknowledge(second.Value.PairId, second.Value.SessionToken).StatusCode == 204, "second device delivery failed");
+        Check(f.Devices.List().Count == 2 && f.Devices.Authenticate(oldToken) == oldId,
+            "same-name ordinary approval replaced the existing device");
+
+        var replace = typeof(BridgePairingService).GetMethod("ReplaceApproved", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
+            binder: null, types: [typeof(string), typeof(string)], modifiers: null)
+            ?? throw new Exception("pairing service has no explicit ReplaceApproved(pairId, oldDeviceId) operation");
+
+        var thirdInvitation = Invite(f);
+        var third = f.Pairing.RequestPair(new BridgePairRequest(thirdInvitation.PairToken, "Same phone"), IPAddress.Parse("192.168.1.33"));
+        Check(third.Value is not null && (bool)replace.Invoke(f.Pairing, [third.Value.PairId, oldId])!, "explicit replacement failed");
+        var newDelivery = f.Pairing.GetStatus(third.Value!.PairId, third.Value.SessionToken).Value!;
+        var newId = newDelivery.DeviceId!;
+        var newToken = newDelivery.DeviceToken!;
+        Check(newId != oldId && f.Devices.List().Count == 2, "replacement did not atomically exchange one device for another");
+        Check(f.Devices.Authenticate(oldToken) is null && f.Devices.Authenticate(newToken) == newId,
+            "replacement did not invalidate the old credential and issue the new one");
+        Check(f.Devices.Authenticate(secondToken) == secondId, "replacement invalidated an unrelated same-name device");
+        Check(f.Grants.Accounts(oldId).Error?.ErrorCode == "ACCOUNT_REAUTHORIZATION_REQUIRED" && f.Grants.Accounts(newId).Value?.Count == 1,
+            "replacement left the old account grant active or failed to grant the new device");
+        Check(f.Pairing.Acknowledge(third.Value.PairId, third.Value.SessionToken).StatusCode == 204, "replacement delivery ACK failed");
+
+        var fourthInvitation = Invite(f);
+        var fourth = f.Pairing.RequestPair(new BridgePairRequest(fourthInvitation.PairToken, "Same phone"), IPAddress.Parse("192.168.1.34"));
+        var fourthPairId = fourth.Value?.PairId ?? throw new Exception("failed replacement pairing request was not created");
+        Check(!(bool)replace.Invoke(f.Pairing, [fourthPairId, Guid.NewGuid().ToString("D")])!,
+            "replacement accepted a stale or unselected old device ID");
+        Check(f.Devices.Authenticate(secondToken) == secondId && f.Devices.Authenticate(newToken) == newId &&
+            f.Pairing.Pending().Any(p => p.PairId == fourthPairId), "failed replacement did not preserve active devices and pending request");
+
+        var devicePath = Path.Combine(f.Root, "devices.dat");
+        var backupPath = Path.Combine(f.Root, "devices.before-failed-replacement.dat");
+        File.Move(devicePath, backupPath);
+        Directory.CreateDirectory(devicePath);
+        try
+        {
+            var persistenceFailed = false;
+            try { replace.Invoke(f.Pairing, [fourthPairId, newId]); }
+            catch (System.Reflection.TargetInvocationException) { persistenceFailed = true; }
+            Check(persistenceFailed, "replacement unexpectedly succeeded when the device-store commit failed");
+            Check(f.Devices.Authenticate(newToken) == newId && f.Grants.Accounts(newId).Value?.Count == 1 &&
+                f.Pairing.Pending().Any(p => p.PairId == fourthPairId), "failed persistence invalidated the old device or consumed the pending request");
+        }
+        finally
+        {
+            Directory.Delete(devicePath);
+            File.Move(backupPath, devicePath);
+        }
+        using var recoveredDevices = new BridgeDeviceStore(f.BridgeId, devicePath);
+        Check(recoveredDevices.Authenticate(newToken) == newId && recoveredDevices.Authenticate(secondToken) == secondId,
+            "failed replacement changed the persisted device records");
+    }
+
     private static async Task ExpiryAndThrottle()
     {
         await using var f = new Fixture(); var invite = Invite(f);
@@ -153,7 +225,14 @@ internal static class BridgeStageThreeTests
             Check(f.Pairing.Acknowledge(value!.PairId, value.SessionToken).StatusCode == 204, "delivery ack failed");
         }
         Check(f.Devices.List().Count == 20, "device cap count mismatch");
-        Check(f.Pairing.CreateInvitation().ErrorCode == "DEVICE_LIMIT_REACHED", "21st pairing was not refused");
+        var replacementInvite = Invite(f);
+        var replacement = f.Pairing.RequestPair(new BridgePairRequest(replacementInvite.PairToken, "Replacement"), IPAddress.Parse("10.1.0.99")).Value;
+        Check(replacement is not null, "full device store prevented a replacement request");
+        Check(!f.Pairing.Approve(replacement!.PairId), "ordinary approval exceeded the device limit");
+        var replacedId = f.Devices.List().First().Id;
+        Check(f.Pairing.ReplaceApproved(replacement.PairId, replacedId), "full device store prevented explicit replacement");
+        Check(f.Devices.List().Count == 20 && f.Devices.List().All(d => d.Id != replacedId), "replacement exceeded capacity or retained old device");
+        Check(f.Pairing.Acknowledge(replacement.PairId, replacement.SessionToken).StatusCode == 204, "replacement delivery failed at capacity");
         var first = f.Devices.List().First();
         Check(f.Pairing.RevokeDevice(first.Id), "device revoke failed");
         Check(f.Pairing.CreateInvitation().Value is not null, "revocation did not free a slot");

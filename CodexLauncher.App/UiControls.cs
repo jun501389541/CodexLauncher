@@ -140,6 +140,9 @@ internal static class UiTheme
             case QuotaBarRow row:
                 row.ApplyTheme();
                 return;
+            case QuotaResetCreditsPanel resetCards:
+                resetCards.ApplyTheme();
+                return;
             case QuotaBar bar:
                 bar.ApplyTheme();
                 return;

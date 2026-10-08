@@ -111,6 +111,7 @@ var tests = new List<(string Name, Action Run)>
     ,("plans the window chrome from the live palette", TestWindowChromePlan)
     ,("applies the chrome colors to a real window handle", TestWindowChromeApply)
     ,("scrolls the page with a themed indicator instead of a system scrollbar", TestScrollHost)
+    ,("scroll resize preserves the main page reading position", TestScrollResize)
     ,("reduces page top padding while preserving header-to-card spacing", TestTopPaddingReduction)
     ,("paints a flat diagnostics header instead of a themed system bar", TestDiagnosticsHeader)
     ,("fits all diagnostic rows without an internal system scrollbar", TestDiagnosticsRowsFit)
@@ -131,6 +132,7 @@ if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase))
 }
 
 tests.AddRange(BridgeStageFiveTests.All);
+tests.AddRange(QuotaResetCreditTests.All);
 tests.AddRange(BridgeStageFourTests.All);
 tests.AddRange(BridgeStageThreeTests.All);
 tests.AddRange(BridgeStageTwoTests.All);
@@ -145,6 +147,10 @@ if (args.Contains("--bridge-stage4", StringComparer.OrdinalIgnoreCase))
     tests = BridgeStageFourTests.All.ToList();
 if (args.Contains("--bridge-stage5", StringComparer.OrdinalIgnoreCase))
     tests = BridgeStageFiveTests.All.ToList();
+if (args.Contains("--reset-cards", StringComparer.OrdinalIgnoreCase))
+    tests = QuotaResetCreditTests.All.ToList();
+if (args.Contains("--window-resize", StringComparer.OrdinalIgnoreCase))
+    tests = WindowResizeTests.All.ToList();
 // D-24 keeps the phone-flow client in this existing test project (no standalone
 // console project). These scenarios use real loopback Kestrel/HttpClient and
 // synthetic credentials, with no host account, LAN adapter or persisted grants.
@@ -1420,6 +1426,9 @@ static void TestCoreInitializationRetry()
                 catch (Exception) { }
             }
             var retry = (Task)initialize.Invoke(form, null)!;
+            var deadline=DateTime.UtcNow.AddSeconds(20);
+            while(!retry.IsCompleted&&DateTime.UtcNow<deadline){Application.DoEvents();Thread.Sleep(10);}
+            if(!retry.IsCompleted)throw new Exception("core initialization retry timed out");
             retry.GetAwaiter().GetResult();
             Equal(true, retry.IsCompletedSuccessfully);
             Equal(1, quotaCreated);
@@ -2170,12 +2179,12 @@ static void TestQuotaResetDetailLabel()
     var window = new QuotaWindow("主要窗口", "5 小时", 300, 99, now.AddHours(4).AddMinutes(38));
     var china = TimeZoneInfo.CreateCustomTimeZone("Test China", TimeSpan.FromHours(8), "中国标准时间", "中国标准时间");
     var west = TimeZoneInfo.CreateCustomTimeZone("Test West", TimeSpan.FromHours(-7), "西部时间", "西部时间");
-    Equal("4小时38分钟后重置 · 10-01 16:38", window.ResetDetailLabel(now, china));
-    Equal("4小时38分钟后重置 · 10-01 01:38", window.ResetDetailLabel(now, west));
+    Equal("4小时38分钟后重置 · 2026-10-01 16:38", window.ResetDetailLabel(now, china));
+    Equal("4小时38分钟后重置 · 2026-10-01 01:38", window.ResetDetailLabel(now, west));
     var localReset = TimeZoneInfo.ConvertTime(window.ResetsAt!.Value, TimeZoneInfo.Local);
-    Equal($"4小时38分钟后重置 · {localReset:MM-dd HH:mm}", window.ResetDetailLabel(now));
+    Equal($"4小时38分钟后重置 · {localReset:yyyy-MM-dd HH:mm}", window.ResetDetailLabel(now));
     Equal("重置时间未知", new QuotaWindow("主要窗口", "5 小时", 300, null, null).ResetDetailLabel(now));
-    Equal("等待确认重置 · 10-01 11:59",
+    Equal("等待确认重置 · 2026-10-01 11:59",
         new QuotaWindow("主要窗口", "5 小时", 300, 40, now.AddMinutes(-1)).ResetDetailLabel(now, china));
 }
 
@@ -2884,6 +2893,32 @@ static void RunWindowChromeApply()
 // 侧边栏：系统滚动条在深色主题下没有可用的着色方式——SetWindowTheme("DarkMode_Explorer")
 // 实测只把滑块涂成 #2E2E42，轨道仍是 #C2C2C2..#DDDDDD 的浅色渐变，比不改还难看。
 // 所以改为自绘细指示条，几何必须严格由比例算出，颜色实时取自 UiTheme。
+static void TestScrollResize()
+{
+    Exception? failure=null;
+    var thread=new Thread(()=>
+    {
+        try
+        {
+            using var main=new MainForm(null,true);
+            IEnumerable<Control> Children(Control root)=>root.Controls.Cast<Control>().SelectMany(c=>new[]{c}.Concat(Children(c)));
+            var host=Children(main).OfType<ScrollHost>().Single();
+            var root=(TableLayoutPanel)host.Controls[0];
+            root.Controls.Add(new Panel{Height=1200,Dock=DockStyle.Top},0,root.RowCount++);
+            main.PerformLayout();root.PerformLayout();
+            host.SetOffset(250);
+            if(host.Offset!=250)throw new Exception($"offset {host.Offset}, content {root.Size}, viewport {host.Size}, main {main.Size}");
+            foreach(var size in new[]{new Size(1120,740),new Size(930,710),new Size(1060,800),new Size(950,730)})
+            {
+                main.Size=size;main.PerformLayout();root.PerformLayout();
+                if(host.Offset!=250)throw new Exception($"offset {host.Offset}, content {root.Size}, viewport {host.Size}, main {main.Size}");
+                Equal(-250,root.Top);
+            }
+        }
+        catch(Exception e){failure=e;}
+    });
+    thread.SetApartmentState(ApartmentState.STA);thread.Start();thread.Join();if(failure is not null)throw failure;
+}
 static void TestScrollHost()
 {
     Exception? failure = null;
@@ -3805,6 +3840,9 @@ static async Task TestLocalQuotaAsync()
     Console.WriteLine($"  Availability: {snapshot.Availability} · {snapshot.AccountLabel} · {snapshot.LevelLabel}");
     Console.WriteLine($"  Detail: {snapshot.Detail}");
     if (snapshot.FailureCategory is { } category) Console.WriteLine($"  FailureCategory: {category}");
+    Console.WriteLine(snapshot.ResetCredits is {} resetCards
+        ? $"  ResetCards: available={resetCards.AvailableCount}, details={(resetCards.Credits?.Count.ToString()??"unknown")}"
+        : "  ResetCards: unavailable");
     foreach (var bucket in snapshot.Buckets)
         Console.WriteLine($"  Bucket {bucket.DisplayName} ({bucket.LimitId}) restricted={bucket.Restricted}");
 
@@ -3863,7 +3901,7 @@ static void TestQuotaParsing()
     // resetsAt 是 Unix 秒：必须换算成同一个时刻，不能当成毫秒。
     Equal(primaryReset, buckets[0].Windows[0].ResetsAt!.Value.ToUniversalTime());
     Equal(secondaryReset, buckets[0].Windows[1].ResetsAt!.Value.ToUniversalTime());
-    Equal($"重置 {primaryReset.ToLocalTime():MM-dd HH:mm}", buckets[0].Windows[0].ResetLabel);
+    Equal($"重置 {primaryReset.ToLocalTime():yyyy-MM-dd HH:mm}", buckets[0].Windows[0].ResetLabel);
 
     // 旧协议：没有 rateLimitsByLimitId 时回落到 rateLimits 单桶。
     var legacy = QuotaResponseParser.ReadBuckets(FakeQuotaJson.LegacyRateLimits, now);

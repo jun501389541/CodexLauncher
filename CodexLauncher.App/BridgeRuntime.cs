@@ -195,7 +195,11 @@ internal sealed class BridgeRuntime:IAsyncDisposable
     internal Task StartAsync(int port)=>string.IsNullOrWhiteSpace(SelectedAdapter)?Task.CompletedTask:_lan.StartAsync(SelectedAdapter,port);
     internal Task StopAsync()=>_lan.StopAsync();
     internal void RenameDevice(string id,string name){if(!Devices.Rename(id,name))throw new InvalidOperationException("DEVICE_INVALID");}
-    internal void RevokeDevice(string id){Devices.Revoke(id);Grants.Revoke(id);Pairing?.RevokeDevice(id);}
+    internal bool RevokeDevice(string id)
+    {
+        if(Pairing is {} pairing)return pairing.RevokeDevice(id);
+        var removed=Devices.Revoke(id);Grants.Revoke(id);return removed;
+    }
     internal void RevokeAll(){Devices.RevokeAll();Grants.RevokeAll();Pairing?.RevokeAll();}
     internal bool ConfirmAccount(string id)=>Devices.List().Any(d=>d.Id==id)&&Grants.ConfirmCurrentAccount(id);
     public async ValueTask DisposeAsync()

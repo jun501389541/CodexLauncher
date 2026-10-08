@@ -30,6 +30,7 @@ internal sealed class ScrollHost : Panel, IMessageFilter
     private Control? _content;
     private int _offset;
     private bool _arranging;
+    private (int Width, int Height, int ContentHeight, int Offset)? _lastArrangement;
 
     public ScrollHost()
     {
@@ -194,9 +195,26 @@ internal sealed class ScrollHost : Panel, IMessageFilter
         TryHandleWheel(screen.X, screen.Y, e.Delta);
     }
 
+    protected override void SetBoundsCore(int x, int y, int width, int height, BoundsSpecified specified)
+    {
+        // 保存整个尺寸更新之前的阅读位置。SizeChanged/AutoSize 的中间布局
+        // 可能暂时缩短内容；只有最终内容高度才应决定偏移上限。
+        var offset = _offset;
+        base.SetBoundsCore(x, y, width, height, specified);
+        if (_content is not null)
+            _offset = Math.Clamp(offset, 0, MaxOffset(ContentHeight, ViewportHeight));
+        Arrange();
+    }
+
     protected override void OnResize(EventArgs eventargs)
     {
         base.OnResize(eventargs);
+        Arrange();
+    }
+
+    protected override void OnLayout(LayoutEventArgs e)
+    {
+        base.OnLayout(e);
         Arrange();
     }
 
@@ -252,7 +270,12 @@ internal sealed class ScrollHost : Panel, IMessageFilter
             _arranging = false;
         }
 
-        Invalidate();
+        var state = (ClientSize.Width, ViewportHeight, ContentHeight, _offset);
+        if (_lastArrangement != state)
+        {
+            _lastArrangement = state;
+            Invalidate();
+        }
     }
 
     private static GraphicsPath Rounded(Rectangle bounds, int radius)

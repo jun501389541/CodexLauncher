@@ -1,9 +1,33 @@
 using CodexLauncher.App;
 using CodexLauncher.Core;
 using System.Net.NetworkInformation;
+using System.Runtime.InteropServices;
+using System.Text.Json;
 
 internal static class BridgeStageFiveTests
 {
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect { public int Left,Top,Right,Bottom; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeScrollBarInfo
+    {
+        public uint Size;
+        public NativeRect Rect;
+        public int LineButton,ThumbTop,ThumbBottom,Reserved;
+        [MarshalAs(UnmanagedType.ByValArray,SizeConst=6,ArraySubType=UnmanagedType.U4)] public uint[] States;
+    }
+    [DllImport("user32.dll",SetLastError=true)]
+    [return:MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetScrollBarInfo(IntPtr handle,int objectId,ref NativeScrollBarInfo info);
+    [DllImport("user32.dll",CharSet=CharSet.Auto)]
+    private static extern IntPtr SendMessage(IntPtr handle,int message,IntPtr wParam,IntPtr lParam);
+    private static bool HorizontalScrollbarVisible(Control control)
+    {
+        var info=new NativeScrollBarInfo{Size=(uint)Marshal.SizeOf<NativeScrollBarInfo>(),States=new uint[6]};
+        return GetScrollBarInfo(control.Handle,-6,ref info)&&info.Rect.Right>info.Rect.Left&&info.Rect.Bottom>info.Rect.Top&&
+            (info.States[0]&0x00008000)==0;
+    }
+
     internal static IEnumerable<(string Name,Action Run)> All =>
     [
         ("background autostart recognizes the executable rather than the full command", Startup),
@@ -19,14 +43,25 @@ internal static class BridgeStageFiveTests
         ,("bridge refresh checks every candidate and shows quality results", AdapterQualitySummary)
         ,("bridge refresh replaces unavailable choices and preserves usable manual choices", AdapterSelectionOnRefresh)
         ,("enabling bridge refreshes adapters before applying the selection", AdapterRefreshOnEnable)
+        ,("fresh bridge preferences default off and preserve explicit opt-in", BridgePreferenceDefaults)
         ,("bounds layout passes when the bridge expands", ExpansionBoundsLayoutPasses)
         ,("bridge panel exposes themed main-window controls and clears invitation state", Panel)
         ,("bridge panel starts collapsed and toggles layout without changing sharing", CollapsiblePanel)
         ,("bridge configuration row keeps refresh action visible at narrow widths", ResponsiveConfigurationRow)
         ,("bridge approval controls retain focus and show selected requests", ApprovalFocus)
+        ,("bridge device lists support checkbox selection and a visible pairing-time column", SelectableDeviceLists)
+        ,("bridge device lists avoid horizontal scroll bars with overflowing row counts", DeviceListsDoNotScrollHorizontally)
+        ,("bridge batch operations continue and report per-device failures", BatchOperationsContinueAfterFailures)
         ,("background main window stays hidden and explicitly exits its owned bridge", BackgroundWindow)
     ];
     private static void Check(bool value,string message){if(!value)throw new Exception(message);}
+    private static void BridgePreferenceDefaults()
+    {
+        var fresh=JsonSerializer.Deserialize<LauncherSettings>("{}")!;
+        Check(!fresh.BridgeEnabled,"a fresh install should not enable phone quota sharing");
+        var saved=JsonSerializer.Deserialize<LauncherSettings>(JsonSerializer.Serialize(fresh with{BridgeEnabled=true}))!;
+        Check(saved.BridgeEnabled,"an explicitly enabled sharing preference was not retained");
+    }
     private static void AdapterChoices()
     {
         var catalog=BridgeAdapterCatalog.Build(
@@ -74,18 +109,26 @@ internal static class BridgeStageFiveTests
                 using var panel=new BridgePanel(() =>
                 {
                     refreshCount++;
-                    return [BridgeAdapterChoice.FromError("wifi","Wi-Fi adapter",null)];
+                    return [
+                        BridgeAdapterChoice.FromError("ethernet","Ethernet adapter",null),
+                        BridgeAdapterChoice.FromError("wifi","Wi-Fi adapter",null) with{Recommended=true}
+                    ];
                 }){Dock=DockStyle.Top};
                 form.Controls.Add(panel);form.Show();Application.DoEvents();
                 panel.Controls.Find("BridgeToggle",true).OfType<Button>().Single().PerformClick();
                 Application.DoEvents();
                 var enabled=(CheckBox)typeof(BridgePanel).GetField("_enabled",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.GetValue(panel)!;
-                enabled.Checked=true;
+                Check(!enabled.Checked,"phone quota sharing should begin disabled");
+                SendMessage(enabled.Handle,0x00F5,IntPtr.Zero,IntPtr.Zero);
+                Application.DoEvents();
+                var selectedAfterEnable=panel.Controls.Find("BridgeAdapterSelector",true).OfType<ComboBox>().Single().SelectedItem as BridgeAdapterChoice;
+                Check(refreshCount==1,"checking the sharing option should run exactly one adapter refresh");
+                Check(selectedAfterEnable?.Id=="wifi","enabling sharing did not select the recommended eligible adapter");
                 string? appliedAdapter=null;
                 panel.ConfigureRequested+=(_,adapter,_)=>{appliedAdapter=adapter;return Task.CompletedTask;};
                 panel.Controls.Find("BridgeApply",true).OfType<Button>().Single().PerformClick();
                 Application.DoEvents();
-                Check(refreshCount==1,"enabling bridge did not refresh the adapter list immediately");
+                Check(refreshCount==1,"applying the refreshed selection ran a duplicate adapter refresh");
                 Check(appliedAdapter=="wifi","bridge apply did not use the adapter selected by the refresh");
 
                 panel.SetConfiguration(true,43189,"stale");
@@ -361,10 +404,13 @@ internal static class BridgeStageFiveTests
                 form.Show();Application.DoEvents();
                 var toggle=panel.Controls.Find("BridgeToggle",true).OfType<Button>().SingleOrDefault();
                 Check(toggle is not null,"bridge collapse toggle missing");
+                Check(toggle!.Text=="AI 额度桥　›"&&toggle.FlatAppearance.MouseOverBackColor==UiTheme.Card,
+                    "collapsed bridge header indicator is visually detached from the title");
                 var input=panel.Controls.Find("BridgeNickname",true).OfType<TextBox>().Single();
                 Check(!input.Visible,"bridge settings should start collapsed");
                 var collapsed=panel.Height;
-                toggle!.PerformClick();Application.DoEvents();form.PerformLayout();
+                toggle.PerformClick();Application.DoEvents();form.PerformLayout();
+                Check(toggle.Text=="AI 额度桥　⌄","expanded bridge header indicator did not reflect its state");
                 Check(input.Visible&&panel.Height>collapsed+200,"expanded bridge settings are clipped or hidden");
                 toggle.PerformClick();Application.DoEvents();form.PerformLayout();
                 Check(!input.Visible&&panel.Height==collapsed,"bridge did not return to collapsed layout");
@@ -424,9 +470,151 @@ internal static class BridgeStageFiveTests
                 pending.Items.Clear();
                 try{typeof(BridgePanel).GetMethod("Decide",flags)!.Invoke(panel,new object[]{true});throw new Exception("unselected approval silently returned");}
                 catch(System.Reflection.TargetInvocationException e)
-                {Check(e.InnerException is InvalidOperationException&&e.InnerException.Message.Contains("选中"),"unselected approval did not explain how to select a phone");}
+                {Check(e.InnerException is InvalidOperationException&&e.InnerException.Message.Contains("勾选"),"unselected approval did not explain how to check a phone");}
             }
             catch(Exception e){error=e;}
+        });
+        thread.SetApartmentState(ApartmentState.STA);thread.Start();thread.Join();if(error is not null)throw error;
+    }
+    private static void SelectableDeviceLists()
+    {
+        Exception? error=null;
+        var thread=new Thread(() =>
+        {
+            try
+            {
+                using var form=new Form{ClientSize=new System.Drawing.Size(860,1100),ShowInTaskbar=false,Opacity=0};
+                using var panel=new BridgePanel(()=>[]){Dock=DockStyle.Top};
+                form.Controls.Add(panel);form.Show();Application.DoEvents();
+                panel.Controls.Find("BridgeToggle",true).OfType<Button>().Single().PerformClick();
+                Application.DoEvents();form.PerformLayout();panel.PerformLayout();
+                var flags=System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic;
+                var pending=(ListView)typeof(BridgePanel).GetField("_pending",flags)!.GetValue(panel)!;
+                var devices=(ListView)typeof(BridgePanel).GetField("_devices",flags)!.GetValue(panel)!;
+                Check(pending.CheckBoxes&&pending.MultiSelect,"pending requests do not support checkbox multi-selection");
+                Check(devices.CheckBoxes&&devices.MultiSelect,"paired devices do not support checkbox multi-selection");
+                Check(pending.Columns.Count==3&&pending.Columns[2].Text.Contains("到期"),"pending list does not expose an expiration-time column");
+                Check(devices.Columns.Count==3&&devices.Columns[2].Text.Contains("配对时间"),"paired list cannot distinguish devices with the same name");
+                foreach(var list in new[]{pending,devices})
+                    Check(list.Columns.Cast<ColumnHeader>().Sum(c=>c.Width)<=list.ClientSize.Width,
+                        $"{list.Name} columns overflow the visible list and require horizontal scrolling");
+                foreach(var list in new[]{pending,devices})
+                    Check(!HorizontalScrollbarVisible(list),$"{list.Name} displays a horizontal scroll bar below the rows");
+                Check(panel.Controls.Find("BridgeReplaceSelected",true).OfType<Button>().Any(),"manual replace action is missing");
+                var approve=panel.Controls.Find("BridgeApproveSelected",true).OfType<Button>().Single();
+                var reject=panel.Controls.Find("BridgeRejectSelected",true).OfType<Button>().Single();
+                var replaceButton=panel.Controls.Find("BridgeReplaceSelected",true).OfType<Button>().Single();
+                var rename=panel.Controls.Find("BridgeRenameSelected",true).OfType<Button>().Single();
+                var authorize=panel.Controls.Find("BridgeAuthorizeSelected",true).OfType<Button>().Single();
+                var revoke=panel.Controls.Find("BridgeRevokeSelected",true).OfType<Button>().Single();
+                Check(!approve.Enabled&&!reject.Enabled&&!replaceButton.Enabled&&!rename.Enabled&&!authorize.Enabled&&!revoke.Enabled,
+                    "batch actions are enabled without checked rows");
+
+                pending.Items.Add(new ListViewItem(new[]{"Phone", "192.168.1.10", "2026-10-08 12:00"}){Tag="pending-1"});
+                devices.Items.Add(new ListViewItem(new[]{"Phone", "已授权", "2026-10-07 12:00"}){Tag="device-1"});
+                Application.DoEvents();
+                foreach(var list in new[]{pending,devices})
+                {
+                    using var uncheckedImage=new System.Drawing.Bitmap(list.Width,list.Height);
+                    list.DrawToBitmap(uncheckedImage,list.ClientRectangle);
+                    list.Items[0].Checked=true;
+                    list.Refresh();Application.DoEvents();
+                    using var checkedImage=new System.Drawing.Bitmap(list.Width,list.Height);
+                    list.DrawToBitmap(checkedImage,list.ClientRectangle);
+                    var rowBounds=list.Items[0].Bounds;
+                    var changed=false;
+                    for(var y=Math.Max(0,rowBounds.Top);y<Math.Min(list.Height,rowBounds.Bottom);y++)
+                        for(var x=0;x<Math.Min(30,list.Width);x++)
+                            changed|=uncheckedImage.GetPixel(x,y)!=checkedImage.GetPixel(x,y);
+                    Check(changed,$"{list.Name} did not visibly render its checkbox state");
+                    list.Items[0].Checked=false;
+                }
+                pending.Items[0].Selected=true;
+                devices.Items[0].Selected=true;
+                Application.DoEvents();
+                Check(pending.Items[0].Checked&&devices.Items[0].Checked&&approve.Enabled&&reject.Enabled&&approve.Text.Contains("1")&&replaceButton.Enabled&&rename.Enabled&&
+                    authorize.Enabled&&authorize.Text.Contains("1")&&revoke.Enabled&&revoke.Text.Contains("1"),
+                    "selecting a row did not check it or update the corresponding batch count");
+                pending.Items.Add(new ListViewItem(new[]{"Phone 2", "192.168.1.11", "2026-10-08 12:00"}){Tag="pending-2"});
+                devices.Items.Add(new ListViewItem(new[]{"Phone 2", "已授权", "2026-10-06 12:00"}){Tag="device-2"});
+                pending.Items[1].Selected=true;devices.Items[1].Selected=true;Application.DoEvents();
+                Check(approve.Text.Contains("2")&&reject.Text.Contains("2")&&authorize.Text.Contains("2")&&revoke.Text.Contains("2")&&
+                    !replaceButton.Enabled&&!rename.Enabled,"multi-selection counts or single-device-only actions are incorrect");
+                pending.Items[1].Checked=false;devices.Items[1].Checked=false;Application.DoEvents();
+
+                var update=typeof(BridgePanel).GetMethod("UpdateList",flags)!;
+                update.Invoke(panel,new object[]{pending,new[]{("pending-1",new[]{"Phone renamed","192.168.1.10","2026-10-08 12:00"})}});
+                update.Invoke(panel,new object[]{devices,new[]{("device-1",new[]{"Phone renamed","已授权","2026-10-07 12:00"})}});
+                Check(pending.Items[0].Checked&&pending.Items[0].Selected&&devices.Items[0].Checked&&devices.Items[0].Selected,
+                    "list refresh did not preserve still-valid checked and focused rows");
+                Check(devices.Items[0].ToolTipText.Contains("device-1"),"paired-device tooltip does not expose the full device ID");
+
+                form.ClientSize=new System.Drawing.Size(520,1100);Application.DoEvents();form.PerformLayout();panel.PerformLayout();
+                foreach(var list in new[]{pending,devices})
+                {
+                    Check(list.Columns.Cast<ColumnHeader>().Sum(c=>c.Width)<=list.ClientSize.Width,
+                        $"{list.Name} columns overflow after resizing to a narrow window");
+                    Check(!HorizontalScrollbarVisible(list),$"{list.Name} displays a horizontal scroll bar after resizing to a narrow window");
+                }
+            }
+            catch(Exception e){error=e;}
+        });
+        thread.SetApartmentState(ApartmentState.STA);thread.Start();thread.Join();if(error is not null)throw error;
+    }
+    private static void BatchOperationsContinueAfterFailures()
+    {
+        var flags=System.Reflection.BindingFlags.Static|System.Reflection.BindingFlags.NonPublic;
+        var execute=typeof(BridgePanel).GetMethod("ExecuteBatch",flags);
+        Check(execute is not null,"batch operation runner is missing");
+        var attempted=new List<string>();
+        var result=(System.Collections.IEnumerable)execute!.Invoke(null,new object[]{
+            new[]{("one","Phone 1"),("two","Phone 2"),("three","Phone 3")},
+            new Func<string,bool>(id=>{attempted.Add(id);if(id=="two")throw new IOException("storage unavailable");return id!="three";})
+        })!;
+        var outcomes=result.Cast<object>().ToArray();
+        Check(attempted.SequenceEqual(new[]{"one","two","three"}),"batch stopped after a failed or rejected device");
+        var succeeded=outcomes.Select(value=>(bool)value.GetType().GetProperty("Succeeded")!.GetValue(value)!).ToArray();
+        Check(succeeded.SequenceEqual(new[]{true,false,false}),"batch outcomes did not report success, exception, and false result individually");
+        Check(outcomes[1].GetType().GetProperty("Error")!.GetValue(outcomes[1])?.ToString()?.Contains("storage unavailable")==true,
+            "batch failure summary omitted the per-device error");
+    }
+    private static void DeviceListsDoNotScrollHorizontally()
+    {
+        Exception? error=null;
+        var thread=new Thread(() =>
+        {
+            try
+            {
+                using var form=new Form{ClientSize=new System.Drawing.Size(860,900),ShowInTaskbar=false,Opacity=0};
+                using var panel=new BridgePanel(()=>[]){Dock=DockStyle.Top};
+                form.Controls.Add(panel);form.Show();Application.DoEvents();
+                panel.Controls.Find("BridgeToggle",true).OfType<Button>().Single().PerformClick();
+                Application.DoEvents();form.PerformLayout();panel.PerformLayout();
+                var flags=System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic;
+                var lists=new[]{
+                    (ListView)typeof(BridgePanel).GetField("_pending",flags)!.GetValue(panel)!,
+                    (ListView)typeof(BridgePanel).GetField("_devices",flags)!.GetValue(panel)!
+                };
+                foreach(var list in lists)
+                    for(var index=0;index<16;index++)
+                        list.Items.Add(new ListViewItem(new[]{"Long phone name "+index,"192.168.1."+index,"2026-10-08 12:00"}){Tag="row-"+index});
+                form.ClientSize=new System.Drawing.Size(520,900);Application.DoEvents();form.PerformLayout();panel.PerformLayout();
+                foreach(var list in lists)
+                {
+                    list.Items[7].Focused=true;
+                    list.TopItem=list.Items[5];
+                    var topId=list.TopItem?.Tag;
+                    var rows=list.Items.Cast<ListViewItem>().Select(item=>((string)item.Tag!,new[]{item.Text+" updated",item.SubItems[1].Text,item.SubItems[2].Text})).ToArray();
+                    typeof(BridgePanel).GetMethod("UpdateList",flags)!.Invoke(panel,new object[]{list,rows});
+                    Check(Equals(list.FocusedItem?.Tag,"row-7")&&Equals(list.TopItem?.Tag,topId),
+                        $"{list.Name} refresh lost the keyboard row or reading position");
+                    Check(list.Columns.Cast<ColumnHeader>().Sum(column=>column.Width)<=list.ClientSize.Width,
+                        $"{list.Name} columns exceed the viewport while vertical scrolling is active");
+                    Check(!HorizontalScrollbarVisible(list),$"{list.Name} displays a useless horizontal scroll bar while rows overflow vertically");
+                }
+
+            }
+            catch(Exception exception){error=exception;}
         });
         thread.SetApartmentState(ApartmentState.STA);thread.Start();thread.Join();if(error is not null)throw error;
     }
@@ -472,6 +660,13 @@ internal static class BridgeStageFiveTests
                 form.Show();
                 Pump(()=>form.CoreInitialization?.IsCompleted==true);
                 Check(!form.Visible&&!form.ShowInTaskbar,"background displayed main window");
+                Pump(()=>typeof(MainForm).GetField("_monitor",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.GetValue(form) is not null);
+                Check(!form.Visible,"runtime monitoring initialization exposed the background window");
+                var flags=System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic;
+                var savedPorts=(GatewayPorts)typeof(MainForm).GetField("_gatewayPorts",flags)!.GetValue(form)!;
+                Check(savedPorts.Party==savedSettings.PartyPort&&savedPorts.Verge==savedSettings.VergePort&&
+                    Equals(typeof(MainForm).GetField("_mihomoPath",flags)!.GetValue(form),savedSettings.MihomoPath),
+                    "background monitoring started with default connection parameters instead of saved values");
                 Check(quotaCreated==1&&registry.Value is null,"background launched extra work or wrote autostart");
                 Pump(()=>runtime?.Status.State=="RUNNING");
                 Check(!form.Visible&&quotaCreated==1&&new LauncherSettingsStore(Path.Combine(root,"settings.json")).Load().BridgeEnabled,"background signal woke UI or ignored bridge");

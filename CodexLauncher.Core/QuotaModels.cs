@@ -62,7 +62,7 @@ public sealed record QuotaWindow(
 
     public string ResetLabel => ResetsAt is null
         ? "重置时间未知"
-        : $"重置 {ResetsAt.Value.ToLocalTime():MM-dd HH:mm}";
+        : $"重置 {ResetsAt.Value.ToLocalTime():yyyy-MM-dd HH:mm}";
 
     /// <summary>倒计时文案；到点后显示“等待确认重置”，不自行填成 100%。</summary>
     public string CountdownLabel(DateTimeOffset now)
@@ -103,7 +103,7 @@ public sealed record QuotaWindow(
     {
         if (ResetsAt is null) return ResetCountdownLabel(now);
         var localReset = TimeZoneInfo.ConvertTime(ResetsAt.Value, displayTimeZone ?? TimeZoneInfo.Local);
-        return string.Create(CultureInfo.InvariantCulture, $"{ResetCountdownLabel(now)} · {localReset:MM-dd HH:mm}");
+        return string.Create(CultureInfo.InvariantCulture, $"{ResetCountdownLabel(now)} · {localReset:yyyy-MM-dd HH:mm}");
     }
 }
 
@@ -156,6 +156,12 @@ public sealed record QuotaSnapshot(
     // 仅用于进程内账号/缓存原子关联。网络必须通过独立 UsageResult 映射。
     [System.Text.Json.Serialization.JsonIgnore]
     public QuotaAccount Identity { get; init; } = QuotaAccount.None;
+
+    /// <summary>与当前账号额度同次读取；null 表示未知，不能当作零张。</summary>
+    public QuotaResetCredits? ResetCredits { get; init; }
+
+    /// <summary>向 Bridge 客户端说明重置卡数据是否返回或格式是否有效。</summary>
+    public string? ResetCreditsStatus { get; init; }
 
     public static QuotaSnapshot Unavailable(string detail, DateTimeOffset checkedAt, string? failureCategory) =>
         new(QuotaAvailability.Unavailable, "暂不可用", detail, QuotaAccountKind.Unknown, null, null,
@@ -312,8 +318,47 @@ public static class QuotaResponseParser
         return new QuotaAccount(kind, email, plan, requiresAuth, workspaceAccountId, stableId);
     }
 
-    public static QuotaSnapshot Build(QuotaAccount account, string? rateLimitsJson, DateTimeOffset now) =>
-        BuildCore(account, rateLimitsJson, now) with { Identity = account, UpdatedAt = now.ToUniversalTime() };
+    public static QuotaSnapshot Build(QuotaAccount account, string? rateLimitsJson, DateTimeOffset now)
+    {
+        (QuotaResetCredits? Credits, string? Status) reset = account.Kind == QuotaAccountKind.ChatGpt && rateLimitsJson is not null
+            ? ReadResetCredits(rateLimitsJson)
+            : (null, null);
+        return BuildCore(account, rateLimitsJson, now) with
+        {
+            Identity = account,
+            UpdatedAt = now.ToUniversalTime(),
+            ResetCredits = reset.Credits,
+            ResetCreditsStatus = reset.Status
+        };
+    }
+
+    private static (QuotaResetCredits? Credits, string? Status) ReadResetCredits(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        if (!root.TryGetProperty("rateLimitResetCredits", out var summary))
+            return (null, "NOT_RETURNED");
+        if (summary.ValueKind != JsonValueKind.Object || Long(summary, "availableCount") is not { } count || count < 0)
+            return (null, "INVALID_FORMAT");
+        if (!summary.TryGetProperty("credits", out var details) || details.ValueKind != JsonValueKind.Array)
+            return (new(count, null), "AVAILABLE");
+
+        var cards = new List<QuotaResetCredit>();
+        foreach (var row in details.EnumerateArray())
+        {
+            if (row.ValueKind != JsonValueKind.Object) continue;
+            DateTimeOffset? expiresAt = null;
+            var expiryKnown = row.TryGetProperty("expiresAt", out var expiry) && expiry.ValueKind == JsonValueKind.Null;
+            if (Long(row, "expiresAt") is { } seconds && seconds >= -62135596800 && seconds <= 253402300799)
+            {
+                expiresAt = DateTimeOffset.FromUnixTimeSeconds(seconds);
+                expiryKnown = true;
+            }
+            cards.Add(new(String(row, "title"), String(row, "description"), String(row, "resetType") ?? "unknown",
+                String(row, "status") ?? "unknown", expiresAt, expiryKnown));
+        }
+        return (new(count, cards), "AVAILABLE");
+    }
 
     private static QuotaSnapshot BuildCore(QuotaAccount account, string? rateLimitsJson, DateTimeOffset now)
     {

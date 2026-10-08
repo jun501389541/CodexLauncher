@@ -66,6 +66,40 @@ internal sealed class BridgeDeviceStore : IBridgeDeviceAuthenticator, IDisposabl
             finally { CryptographicOperations.ZeroMemory(raw); }
         }
     }
+    internal BridgeDeviceSummary? ReplaceApproved(string existingDeviceId, string name,
+        Func<string, bool> authorizeNewDevice, Action<string> rollbackNewAuthorization, out string token)
+    {
+        ValidateName(name);
+        ArgumentNullException.ThrowIfNull(authorizeNewDevice);
+        ArgumentNullException.ThrowIfNull(rollbackNewAuthorization);
+        lock (_sync)
+        {
+            ThrowIfDisposed();
+            if (!_devices.Any(d => d.Id == existingDeviceId)) { token = string.Empty; return null; }
+            var raw = RandomNumberGenerator.GetBytes(32);
+            try
+            {
+                token = BridgeTokens.Encode(raw);
+                var item = new Device(Guid.NewGuid().ToString("D"), name.Trim(),
+                    Convert.ToHexString(SHA256.HashData(raw)).ToLowerInvariant(), DateTimeOffset.UtcNow, false);
+                if (!authorizeNewDevice(item.Id)) { token = string.Empty; return null; }
+                var next = _devices.Where(d => d.Id != existingDeviceId).Append(item).ToList();
+                try
+                {
+                    Save(next);
+                    _devices = next;
+                    return new(item.Id, item.Name, item.AddedAt);
+                }
+                catch
+                {
+                    token = string.Empty;
+                    try { rollbackNewAuthorization(item.Id); } catch { }
+                    throw;
+                }
+            }
+            finally { CryptographicOperations.ZeroMemory(raw); }
+        }
+    }
     internal bool CompleteDelivery(string id)
     {
         lock (_sync)

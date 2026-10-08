@@ -28,7 +28,16 @@ public sealed record UsageWindow(string Id, string Label, double? UsedPercent, d
 public sealed record UsageResult(int SchemaVersion, string BridgeId, string ProviderId, string AccountId,
     string DisplayName, string Status, IReadOnlyList<UsageWindow> QuotaWindows,
     DateTimeOffset UpdatedAt, DateTimeOffset? DataTimestamp, DateTimeOffset? SourceTimestamp,
-    bool IsStale, string? ErrorCode);
+    bool IsStale, string? ErrorCode,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] BridgeResetCredits? RateLimitResetCredits = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RateLimitResetCreditsStatus = null);
+
+/// <summary>Sanitized reset-credit fields consumed by the Android Bridge parser.</summary>
+public sealed record BridgeResetCredits(long AvailableCount, IReadOnlyList<BridgeResetCredit>? Credits);
+
+/// <summary>Wire shape deliberately excludes redemption IDs and desktop-only display labels.</summary>
+public sealed record BridgeResetCredit(string ResetType, string Status, string? Title, string? Description,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] JsonElement? ExpiresAt);
 
 public sealed record BridgeAccount(string ProviderId, string AccountId, string DisplayName);
 public sealed record BridgeError(string ErrorCode);
@@ -57,11 +66,29 @@ public static class UsageResultMapper
                 window.DurationLabel, window.UsedPercent,
                 window.UsedPercent is { } used ? Math.Clamp(100d - used, 0, 100) : window.RemainingPercent,
                 window.DurationMinutes, window.ResetsAt?.ToUniversalTime()))).ToArray() : [];
+        var canShareCredits = monitoringEnabled && snapshot.Availability == QuotaAvailability.Available;
+        var resetCredits = canShareCredits && snapshot.ResetCredits is { } summary
+            ? new BridgeResetCredits(summary.AvailableCount, summary.Credits?.Select(card =>
+                new BridgeResetCredit(card.ResetType, card.Status, card.Title, card.Description,
+                    ExpirationJson(card))).ToArray())
+            : null;
+        var resetCreditsStatus = canShareCredits
+            ? snapshot.ResetCreditsStatus ?? (snapshot.ResetCredits is null ? "NOT_RETURNED" : "AVAILABLE")
+            : "NOT_RETURNED";
         return new UsageResult(1, bridgeId, "codex", accountId, displayName, status, windows,
             (snapshot.UpdatedAt ?? snapshot.CheckedAt).ToUniversalTime(),
             hasData ? snapshot.DataTimestamp?.ToUniversalTime() : null,
             hasData ? snapshot.SourceTimestamp?.ToUniversalTime() : null,
-            hasData && snapshot.IsStale, !monitoringEnabled ? "QUOTA_MONITORING_DISABLED" : ErrorCode(snapshot.FailureCategory));
+            hasData && snapshot.IsStale, !monitoringEnabled ? "QUOTA_MONITORING_DISABLED" : ErrorCode(snapshot.FailureCategory),
+            resetCredits, resetCreditsStatus);
+    }
+
+    private static JsonElement? ExpirationJson(QuotaResetCredit card)
+    {
+        if (!card.ExpiryKnown) return null;
+        return card.ExpiresAt is { } expiry
+            ? JsonSerializer.SerializeToElement(expiry.ToUniversalTime(), BridgeJson.Options)
+            : JsonDocument.Parse("null").RootElement.Clone();
     }
 
     private static bool IsNetworkFailure(string? category) => category is
