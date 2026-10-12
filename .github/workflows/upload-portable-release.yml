@@ -1,4 +1,4 @@
-name: Upload portable release ZIP
+name: Upload Windows release packages
 
 on:
   workflow_dispatch:
@@ -6,12 +6,10 @@ on:
       tag:
         description: Existing GitHub draft release tag
         required: true
-        default: v1.0.4
         type: string
       release_id:
         description: Existing GitHub draft release ID
         required: true
-        default: '402740660'
         type: string
 
 permissions:
@@ -31,7 +29,21 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Build portable ZIP and checksum
+      - name: Prepare Inno Setup compiler
+        shell: pwsh
+        run: |
+          $toolDir = Join-Path $env:RUNNER_TEMP 'inno-6.7.3'
+          $download = Join-Path $env:RUNNER_TEMP 'innosetup-6.7.3.exe'
+          Invoke-WebRequest -Uri 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe' -OutFile $download
+          if ((Get-FileHash $download -Algorithm SHA256).Hash.ToLowerInvariant() -ne '9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732') {
+            throw 'Inno Setup compiler digest mismatch'
+          }
+          if ((Get-AuthenticodeSignature $download).Status -ne 'Valid') { throw 'Inno Setup signature invalid' }
+          $process = Start-Process $download -ArgumentList @('/PORTABLE=1', '/CURRENTUSER', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NOICONS', "/DIR=`"$toolDir`"") -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw 'Inno Setup preparation failed' }
+          "INNO_COMPILER=$toolDir\ISCC.exe" | Add-Content -LiteralPath $env:GITHUB_ENV
+
+      - name: Build installer, portable ZIP and checksums
         shell: pwsh
         env:
           RELEASE_TAG: ${{ inputs.tag }}
@@ -52,6 +64,10 @@ jobs:
             -p:PublishSingleFile=true -o $publishDir --no-restore
           if ($LASTEXITCODE -ne 0) { throw 'dotnet publish failed' }
 
+          ./installer/build-installer.ps1 -PublishDir $publishDir -CompilerPath $env:INNO_COMPILER
+          $setupPath = "dist/CodexLauncher-v$version-win-x64-setup.exe"
+          if (-not (Test-Path $setupPath)) { throw 'Installer version does not match the release tag' }
+
           Set-Content -LiteralPath "$publishDir/CodexLauncher.portable" `
             -Value 'portable' -NoNewline -Encoding utf8
           Compress-Archive -Path "$publishDir/*" `
@@ -69,6 +85,7 @@ jobs:
           RELEASE_ID: ${{ inputs.release_id }}
         run: |
           $headers = @{
+            'User-Agent' = 'CodexLauncher-Release/1.0'
             Authorization = "Bearer $env:GH_TOKEN"
             Accept = 'application/vnd.github+json'
             'X-GitHub-Api-Version' = '2022-11-28'
@@ -82,6 +99,8 @@ jobs:
 
           $version = $env:RELEASE_TAG.Substring(1)
           foreach ($path in @(
+            "dist/CodexLauncher-v$version-win-x64-setup.exe",
+            "dist/CodexLauncher-v$version-win-x64-setup.exe.sha256",
             "dist/CodexLauncher-v$version-win-x64-portable.zip",
             "dist/CodexLauncher-v$version-win-x64-portable.zip.sha256"
           )) {
@@ -91,6 +110,7 @@ jobs:
             $handler = [System.Net.Http.HttpClientHandler]::new()
             $client = [System.Net.Http.HttpClient]::new($handler)
             $client.Timeout = [TimeSpan]::FromMinutes(10)
+            $client.DefaultRequestHeaders.UserAgent.ParseAdd('CodexLauncher-Release/1.0')
             $client.DefaultRequestHeaders.Authorization = `
               [System.Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', $env:GH_TOKEN)
             $client.DefaultRequestHeaders.Accept.ParseAdd('application/vnd.github+json')
